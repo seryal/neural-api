@@ -7,7 +7,8 @@ program SimpleImageClassifier;
 
 uses {$IFDEF UNIX} {$IFDEF UseCThreads}
   cthreads, {$ENDIF} {$ENDIF}
-  Classes, SysUtils, CustApp, neuralnetwork, neuralvolume, Math, neuraldatasets, neuralfit;
+  Classes, SysUtils, CustApp, neuralnetwork, neuralvolume,
+  Math, neuraldatasets, neuralfit, neuralthread;
 
 type
   TTestCNNAlgo = class(TCustomApplication)
@@ -17,7 +18,7 @@ type
 
   procedure TTestCNNAlgo.DoRun;
   var
-    NN: THistoricalNets;
+    NN: TNNet;
     NeuralFit: TNeuralImageFit;
     ImgTrainingVolumes, ImgValidationVolumes, ImgTestVolumes: TNNetVolumeList;
   begin
@@ -27,16 +28,16 @@ type
       exit;
     end;
     WriteLn('Creating Neural Network...');
-    NN := THistoricalNets.Create();
+    NN := TNNet.Create();
     NN.AddLayer([
       TNNetInput.Create(32, 32, 3),
-      TNNetConvolutionLinear.Create(64, 5, 2, 1, 1),
+      TNNetConvolutionLinear.Create({Features=}64, {FeatureSize=}5, {Padding=}2, {Stride=}1, {SuppressBias=}1),
       TNNetMaxPool.Create(4),
       TNNetMovingStdNormalization.Create(),
-      TNNetConvolutionReLU.Create(64, 3, 1, 1, 1),
-      TNNetConvolutionReLU.Create(64, 3, 1, 1, 1),
-      TNNetConvolutionReLU.Create(64, 3, 1, 1, 1),
-      TNNetConvolutionReLU.Create(64, 3, 1, 1, 1),
+      TNNetConvolutionReLU.Create({Features=}64, {FeatureSize=}3, {Padding=}1, {Stride=}1, {SuppressBias=}1),
+      TNNetConvolutionReLU.Create({Features=}64, {FeatureSize=}3, {Padding=}1, {Stride=}1, {SuppressBias=}1),
+      TNNetConvolutionReLU.Create({Features=}64, {FeatureSize=}3, {Padding=}1, {Stride=}1, {SuppressBias=}1),
+      TNNetConvolutionReLU.Create({Features=}64, {FeatureSize=}3, {Padding=}1, {Stride=}1, {SuppressBias=}1),
       TNNetDropout.Create(0.5),
       TNNetMaxPool.Create(2),
       TNNetFullConnectLinear.Create(10),
@@ -46,7 +47,7 @@ type
     CreateCifar10Volumes(ImgTrainingVolumes, ImgValidationVolumes, ImgTestVolumes);
 
     NeuralFit := TNeuralImageFit.Create;
-    NeuralFit.FileNameBase := 'SimpleImageClassifier';
+    NeuralFit.FileNameBase := 'SimpleImageClassifier-'+IntToStr(GetProcessId());
     NeuralFit.InitialLearningRate := 0.001;
     NeuralFit.LearningRateDecay := 0.01;
     NeuralFit.StaircaseEpochs := 10;

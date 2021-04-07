@@ -51,9 +51,26 @@ type
   end;
 
 function MaxSingle(x, y: single): single;
-
+function GetMaxDivisor(x, acceptableMax: integer): integer;
 
 implementation
+
+function GetMaxDivisor(x, acceptableMax: integer): integer;
+begin
+  Result := acceptableMax;
+  if x <= acceptableMax then
+  begin
+    Result := x;
+  end
+  else
+  begin
+    while (Result > 1) do
+    begin
+      if x mod Result = 0 then break;
+      Dec(Result);
+    end;
+  end;
+end;
 
 constructor TIncDec.Init(PMin, PMax, PStep, Start: longint);
 begin

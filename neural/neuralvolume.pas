@@ -53,6 +53,7 @@ const
 
 type
   TNeuralFloat = Single;
+  TNeuralFloatDynArr = array of TNeuralFloat;
   TNeuralFloatPtr = ^TNeuralFloat;
 
   TNeuralFloat4 = array[0..3] of TNeuralFloat;
@@ -110,6 +111,8 @@ type
     procedure SetTag(I: integer); {$IFDEF Release} inline; {$ENDIF}
     function GetTags(x: integer): integer; {$IFDEF Release} inline; {$ENDIF}
     procedure SetTags(x: integer; AValue: integer); {$IFDEF Release} inline; {$ENDIF}
+    class procedure MulAddPPVS(PtrA, PtrB: TNeuralFloatArrPtr; Value: T;
+      pSize: integer); {$IFDEF Release} inline; {$ENDIF}
   public
     // FData was made public to allow other fast operations
     FData: array of T;
@@ -139,6 +142,7 @@ type
     procedure Add(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     class procedure Add(PtrA, PtrB: TNeuralFloatArrPtr; NumElements: integer); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure AddAtDepth(pDepth: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
+    procedure AddAtDepth(pDepth: integer; Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure AddLayers(A,B: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Sub(x, y, d: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Sub(Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -161,6 +165,7 @@ type
     procedure VSqrt(); {$IFDEF Release} inline; {$ENDIF}
     procedure MulAdd(Value: T; Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure MulMulAdd(Value1, Value2: T; Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
+    class procedure MulMulAdd(PtrA, PtrB: TNeuralFloatArrPtr; Value1, Value2: T; pSize: integer); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure MulAdd(Value: T; PtrB: TNeuralFloatArrPtr); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure MulAdd(Original1, Original2: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     class procedure MulAdd(PtrA, PtrB: TNeuralFloatArrPtr; Value: T; pSize: integer); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -173,7 +178,7 @@ type
     procedure Randomize(a:integer=10000; b:integer=5000; c:integer=5000); {$IFDEF Release} inline; {$ENDIF}
     procedure RandomizeGaussian(pMul: TNeuralFloat = 1.0); {$IFDEF Release} inline; {$ENDIF}
     procedure AddGaussianNoise(pMul: TNeuralFloat); {$IFDEF Release} inline; {$ENDIF}
-    procedure AddSaltAndPepper(pNum: integer; pSalt: integer = 2; pPepper: integer = -2); {$IFDEF Release} inline; {$ENDIF}
+    procedure AddSaltAndPepper(pNum: integer; pSalt: T = 1.0; pPepper: T = -1.0; pColor:boolean = false); {$IFDEF Release} inline; {$ENDIF}
     function RandomGaussianValue(): TNeuralFloat; {$IFDEF Release} inline; {$ENDIF}
     procedure Copy(Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure CopyRelu(Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -189,7 +194,9 @@ type
     procedure Define(Original: array of T);
     function DotProduct(Original: TVolume): T; overload; {$IFDEF Release} inline; {$ENDIF}
     class function DotProduct(PtrA, PtrB: TNeuralFloatArrPtr; NumElements: integer): Single; overload; {$IFDEF Release} inline; {$ENDIF}
+    class function Product(PtrA: TNeuralFloatArrPtr; NumElements: integer): Single; overload; {$IFDEF Release} inline; {$ENDIF}
     function SumDiff(Original: TVolume): T;  {$IFDEF Release} inline; {$ENDIF}
+    procedure DebugDiff(Original: TVolume; Limit: Single = 0);
     procedure SumToPos(Original: TVolume);
     function GetDistanceSqr(Original: TVolume): T;  overload; {$IFDEF Release} inline; {$ENDIF}
     function GetDistance(Original: TVolume): T;  overload; {$IFDEF Release} inline; {$ENDIF}
@@ -207,6 +214,7 @@ type
     function GetMaxAbs(): T; {$IFDEF Release} inline; {$ENDIF}
     procedure GetMinMaxAtDepth(pDepth: integer; out pMin, pMax: T);
     function GetSum(): T; virtual;
+    function GetSumAbs(): T; virtual;
     function GetSumSqr(): T; virtual;
     function GetAvg(): T; {$IFDEF Release} inline; {$ENDIF}
     function GetVariance(): T; {$IFDEF Release} inline; {$ENDIF}
@@ -216,6 +224,7 @@ type
     procedure FlipY();
     procedure IncTag(); {$IFDEF Release} inline; {$ENDIF}
     procedure ClearTag(); {$IFDEF Release} inline; {$ENDIF}
+    function NeuralToStr(V: TNeuralFloat): string;
 
     // Color and Neuronal Weights Transformations
     procedure RgbImgToNeuronalInput(color_encoding: integer);
@@ -299,6 +308,8 @@ type
       procedure InterleavedDotProduct(InterleavedAs, B:TNNetVolume);  overload;
       procedure InterleavedDotProduct(InterleavedAs, Bs:TNNetVolume; VectorSize: integer); overload;
       procedure DotProducts(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume);
+      procedure DotProductsTiled(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
+      procedure AddArea(DestX, DestY, OriginX, OriginY, LenX, LenY: integer; Original: TNNetVolume);
       function HasAVX: boolean; {$IFDEF Release} inline; {$ENDIF}
       function HasAVX2: boolean; {$IFDEF Release} inline; {$ENDIF}
       function HasAVX512: boolean; {$IFDEF Release} inline; {$ENDIF}
@@ -309,7 +320,8 @@ type
       procedure MulChannels(Original: TNNetVolume); {$IFDEF Release} inline; {$ENDIF}
       procedure Mul(Original: TNNetVolume); overload; {$IFDEF Release} inline; {$ENDIF}
       procedure NormalizeMax(Value: TNeuralFloat); {$IFDEF Release} inline; {$ENDIF}
-      // Do not use RecurrencePlot as it's still in testing.
+      /// Calculates the recurrence plot from the input volume
+      // https://en.wikipedia.org/wiki/Recurrence_plot
       procedure RecurrencePlot(Original: TNNetVolume; Threshold: TNeuralFloat);
       /// This function creates one output channel for each input channel.
       // The recurrence plot is calculated from Original's X axis.
@@ -370,7 +382,7 @@ type
       FErrorProc: TGetStrProc;
 
     public
-      constructor Create();
+      constructor Create(); virtual;
       destructor Destroy(); override;
 
       procedure DefaultMessageProc(const S: string);
@@ -403,11 +415,15 @@ type
       procedure ConcatInto(V: TNNetVolume);
       procedure InterleaveInto(V: TNNetVolume);
       procedure SplitFrom(V: TNNetVolume);
-      procedure AddVolumes(pVolNum, pSizeX, pSizeY, pDepth: integer; c: TNeuralFloat = 0);
+      procedure AddVolumes(pVolNum, pSizeX, pSizeY, pDepth: integer; c: TNeuralFloat = 0); overload;
+      procedure AddVolumes(Origin: TNNetVolumeList); overload;
+      procedure AddCopy(Origin: TNNetVolume);
       procedure AddInto(Original: TNNetVolume);
       procedure SortByTagAsc;
       procedure SortByTagDesc;
       procedure GetColumn(V: TNNetVolume; colIdx: integer);
+      procedure ResizeImage(NewSizeX, NewSizeY: integer);
+      procedure AddPadding(Padding: integer);
      {$IFNDEF FPC}
       property Items[Index: Integer]: TNNetVolume read GetItem write SetItem; default;
      {$ENDIF}
@@ -538,7 +554,8 @@ type
   function DiffAct(x: TNeuralFloat): TNeuralFloat;
   function DiffActDerivative(x: TNeuralFloat): TNeuralFloat;
 
-  function NeuronForceMinMax(x, pMin, pMax: TNeuralFloat): TNeuralFloat; {$IFDEF Release} inline; {$ENDIF}
+  function NeuronForceMinMax(x, pMin, pMax: TNeuralFloat): TNeuralFloat; overload; {$IFDEF Release} inline; {$ENDIF}
+  function NeuronForceMinMax(x, pMin, pMax: integer): integer; overload; {$IFDEF Release} inline; {$ENDIF}
   function NeuronForceRange(x, range:TNeuralFloat): TNeuralFloat; {$IFDEF Release} inline; {$ENDIF}
   function NeuronForceMinRange(x, range:TNeuralFloat): TNeuralFloat; {$IFDEF Release} inline; {$ENDIF}
 
@@ -559,6 +576,9 @@ type
 
   function CompareNNetVolumeListAsc(const Item1, Item2: TNNetVolume): Integer;
   function CompareNNetVolumeListDesc(const Item1, Item2: TNNetVolume): Integer;
+
+  function NeuralFloatToStr(V: TNeuralFloat): string;
+  function NeuralStrToFloat(V: String): TNeuralFloat;
 
   procedure TestTNNetVolume();
   procedure TestKMeans();
@@ -673,6 +693,13 @@ begin
 end;
 
 function NeuronForceMinMax(x, pMin, pMax: TNeuralFloat): TNeuralFloat;
+begin
+  if (x>pMax) then Result := pMax
+  else if (x<pMin) then Result := pMin
+  else Result := x;
+end;
+
+function NeuronForceMinMax(x, pMin, pMax: integer): integer;
 begin
   if (x>pMax) then Result := pMax
   else if (x<pMin) then Result := pMin
@@ -1141,6 +1168,24 @@ begin
   Result := Item2.Tag - Item1.Tag;
 end;
 
+function NeuralFloatToStr(V: TNeuralFloat): string;
+var
+  LocalFormatSettings: TFormatSettings;
+begin
+  {$IFDEF FPC} LocalFormatSettings := DefaultFormatSettings; {$ENDIF}
+  LocalFormatSettings.DecimalSeparator := '.';
+  Result := FloatToStr(V,LocalFormatSettings);
+end;
+
+function NeuralStrToFloat(V: string): TNeuralFloat;
+var
+  LocalFormatSettings: TFormatSettings;
+begin
+  {$IFDEF FPC} LocalFormatSettings := DefaultFormatSettings; {$ENDIF}
+  LocalFormatSettings.DecimalSeparator := '.';
+  Result := StrToFloat(V,LocalFormatSettings);
+end;
+
 procedure TestTNNetVolume();
 var
   TestSize: integer;
@@ -1170,6 +1215,13 @@ begin
     Result := Result + Abs( R.Raw[I] - (A.Raw[I]+B.Raw[I]) );
   end;
   WriteLn(' A + B:',Result);
+
+  Result := 0;
+  for I := 0 to A.Size - 1 do
+  begin
+    Result := Result + ( A.Raw[I] * B.Raw[I]);
+  end;
+  WriteLn(' A . B:',Result - A.DotProduct(B));
 
   R.Copy(A);
   R.Sub(B);
@@ -1647,7 +1699,7 @@ begin
       begin
         if Volume.FData[I] > Threshold then
         begin
-          FTokenizer.Add(Self[I]+':'+FloatToStr(Volume.FData[I]));
+          FTokenizer.Add(Self[I]+':'+Volume.NeuralToStr(Volume.FData[I]));
         end;
       end;
     end;
@@ -2027,6 +2079,33 @@ begin
   end;
 end;
 
+procedure TNNetVolumeList.AddVolumes(Origin: TNNetVolumeList);
+var
+  I: integer;
+  NewVolume: TNNetVolume;
+begin
+  if Origin.Count > 0 then
+  begin
+    for I := 0 to Origin.Count - 1 do
+    begin
+      NewVolume := TNNetVolume.Create();
+      NewVolume.Copy(Origin[I]);
+      Self.Add( NewVolume );
+    end;
+  end;
+end;
+
+procedure TNNetVolumeList.AddCopy(Origin: TNNetVolume);
+var
+  NewVolume: TNNetVolume;
+begin
+  NewVolume := TNNetVolume.Create();
+  NewVolume.Copy(Origin);
+  NewVolume.Tags[0] := Origin.Tags[0];
+  NewVolume.Tags[1] := Origin.Tags[1];
+  Self.Add( NewVolume );
+end;
+
 procedure TNNetVolumeList.AddInto(Original: TNNetVolume);
 var
   MaxVolumes, I: integer;
@@ -2075,6 +2154,40 @@ begin
     begin
       V.FData[I] := Self[I].FData[colIdx];
     end;
+  end;
+end;
+
+procedure TNNetVolumeList.ResizeImage(NewSizeX, NewSizeY: integer);
+var
+  I: integer;
+  AuxVolume: TNNetVolume;
+begin
+  if (Count>0) then
+  begin
+    AuxVolume := TNNetVolume.Create();
+    for I := 0 to Count - 1 do
+    begin
+      AuxVolume.Copy(Self[I]);
+      Self[I].CopyResizing(AuxVolume, NewSizeX, NewSizeY);
+    end;
+    AuxVolume.Free;
+  end;
+end;
+
+procedure TNNetVolumeList.AddPadding(Padding: integer);
+var
+  I: integer;
+  AuxVolume: TNNetVolume;
+begin
+  if (Count>0) then
+  begin
+    AuxVolume := TNNetVolume.Create();
+    for I := 0 to Count - 1 do
+    begin
+      AuxVolume.Copy(Self[I]);
+      Self[I].CopyPadding(AuxVolume, Padding);
+    end;
+    AuxVolume.Free;
   end;
 end;
 
@@ -2220,8 +2333,8 @@ end;
 
 // inspired on
 // https://medium.com/ymedialabs-innovation/data-augmentation-techniques-in-cnn-using-tensorflow-371ae43d5be9
-procedure TVolume.AddSaltAndPepper(pNum: integer; pSalt: integer;
-  pPepper: integer);
+procedure TVolume.AddSaltAndPepper(pNum: integer; pSalt: T = 1.0;
+  pPepper: T = -1.0; pColor:boolean = false);
 var
   I: integer;
   CntDepth: integer;
@@ -2236,10 +2349,12 @@ begin
 
     for CntDepth := 0 to FDepth - 1 do
     begin
-     Self.Data[SaltPosX, SaltPosY, CntDepth] := pSalt;
-     Self.Data[PepperPosX, PepperPosY, CntDepth] := pPepper;
+      if (Not(pColor) or (Random(100) < 50) ) then
+      begin
+        Self.Data[SaltPosX, SaltPosY, CntDepth] := pSalt;
+        Self.Data[PepperPosX, PepperPosY, CntDepth] := pPepper;
+      end;
     end;
-
   end;
 end;
 
@@ -2330,6 +2445,35 @@ begin
       FData[RawPos] := FData[RawPos] + Value;
       {$ENDIF}
     end;
+  end;
+end;
+
+procedure TVolume.AddAtDepth(pDepth: integer; Original: TVolume);
+var
+  CntX, CntY: integer;
+  MaxX, MaxY: integer;
+  RawPos: integer;
+begin
+  MaxX := SizeX - 1;
+  MaxY := SizeY - 1;
+  if Self.Size = Original.Size then
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntY := 0 to MaxY do
+      begin
+        RawPos := Self.GetRawPos(CntX, CntY, pDepth);
+        {$IFDEF FPC}
+        FData[RawPos] += Original.FData[RawPos];
+        {$ELSE}
+        FData[RawPos] := FData[RawPos] + Original.FData[RawPos];
+        {$ENDIF}
+      end;
+    end;
+  end
+  else
+  begin
+    WriteLn('To Be Implemented.');
   end;
 end;
 
@@ -2462,6 +2606,73 @@ begin
     end;
   end;
 end;
+(*
+// this is a new version to be validated.
+var
+  NewX: integer;
+  I: integer;
+  vHigh: integer;
+  posX, posD, maxPosX: integer;
+  NewDepth2, NewDepth3, NewDepth4, vHighM4: integer;
+  SourcePtr, DestPtr: TNeuralFloatPtr;
+begin
+  NewX := Original.FSize div NewDepth;
+  Resize(NewX,1,NewDepth);
+  NewDepth2 := NewDepth  + NewDepth;
+  NewDepth3 := NewDepth2 + NewDepth;
+  NewDepth4 := NewDepth3 + NewDepth;
+
+  vHigh := High(FData);
+  vHighM4 := vHigh - 4;
+
+  posX := 0;
+  posD := 0;
+
+  maxPosX := NewX * NewDepth;
+
+  SourcePtr := Addr(Original.FData[0]);
+  DestPtr := Addr(FData[posX + posD]);
+
+  //for I := 0 to vHigh do
+  I := 0;
+  while I <= vHigh do
+  begin
+    //posX := I mod NewX;
+    //posD := I div NewX;
+    //Self.Data[posX, 0, posD] := Original.FData[I];
+    while ( (I<vHighM4) and (posX + NewDepth4 < maxPosX) ) do
+    begin
+      (DestPtr            )^ := (SourcePtr)^;
+      (DestPtr + NewDepth )^ := (SourcePtr+1)^;
+      (DestPtr + NewDepth2)^ := (SourcePtr+2)^;
+      (DestPtr + NewDepth3)^ := (SourcePtr+3)^;
+      Inc(I, 4);
+      Inc(posX, NewDepth4);
+      Inc(SourcePtr,4);
+      Inc(DestPtr, NewDepth4);
+    end;
+
+    (DestPtr)^ := (SourcePtr)^;
+    Inc(SourcePtr, 1);
+    Inc(posX, NewDepth);
+    Inc(I);
+
+    if I <= vHigh then
+    begin
+      if posX >= maxPosX then
+      begin
+        posX := 0;
+        posD := posD + 1;
+        DestPtr := Addr(FData[posX + posD]);
+      end
+      else
+      begin
+        Inc(DestPtr, NewDepth);
+      end;
+    end;
+  end;
+end;
+*)
 
 procedure TVolume.InterleaveWithXFrom(Original: TVolume; NewX: integer);
 begin
@@ -2613,47 +2824,70 @@ begin
 end;
 
 procedure TVolume.MulMulAdd(Value1, Value2: T; Original: TVolume);
-var
-  I: integer;
-  vHigh: integer;
 begin
-  vHigh := High(FData);
-  for I := 0 to vHigh do
-    FData[I] := FData[I]*Value1 + Original.FData[I]*Value2;
+  MulMulAdd(Addr(Self.FData[0]), Addr(Original.FData[0]), Value1, Value2, Self.Size);
 end;
 
 procedure TVolume.MulAdd(Value: T; PtrB: TNeuralFloatArrPtr);
-var
-  I: integer;
-  vHigh: integer;
 begin
-  vHigh := High(FData);
-  for I := 0 to vHigh do
-    {$IFDEF FPC}
-    FData[I] += PtrB^[I]*Value;
-    {$ELSE}
-    FData[I] := FData[I] + PtrB^[I]*Value;
-    {$ENDIF}
+  MulAddPPVS(TNeuralFloatArrPtr(Addr(Self.FData[0])), PtrB, Value, Self.Size);
 end;
 
 procedure TVolume.MulAdd(Original1, Original2: TVolume);
-var
-  I: integer;
-  vHigh: integer;
 begin
-  vHigh := High(FData);
-  for I := 0 to vHigh do
-    FData[I] := FData[I] + Original1.FData[I] * Original2.FData[I];
+  {$IFDEF Debug}
+  if Original1.Size <> Self.Size then
+    raise Exception.Create('Sizes don''t match at MulAdd parameter 1: ' +
+      IntToStr(Self.Size) + ' and ' + IntToStr(Original1.Size) + ' .');
+  if Original2.Size <> Self.Size then
+    raise Exception.Create('Sizes don''t match at MulAdd parameter 2: ' +
+      IntToStr(Self.Size) + ' and ' + IntToStr(Original2.Size) + ' .');
+  {$ENDIF}
+  MulAdd(Addr(Self.FData[0]), Addr(Original1.FData[0]), Addr(Original2.FData[0]), Self.Size);
 end;
 
-class procedure TVolume.MulAdd(PtrA, PtrB: TNeuralFloatArrPtr; Value: T;
+class procedure TVolume.MulAddPPVS(PtrA, PtrB: TNeuralFloatArrPtr; Value: T;
   pSize: integer);
 var
   I: integer;
   vHigh: integer;
+  BasePos: integer;
+  AddrA, AddrB: TNeuralFloatPtr;
 begin
+  BasePos := 0;
   vHigh := pSize - 1;
-  for I := 0 to vHigh do
+
+  {$IFDEF FPC}
+  AddrA := pointer(PtrA);
+  AddrB := pointer(PtrB);
+  while BasePos <= vHigh - 7 do
+  begin
+    (AddrA)^   := (AddrA)^   + (AddrB)^   * Value;
+    (AddrA+1)^ := (AddrA+1)^ + (AddrB+1)^ * Value;
+    (AddrA+2)^ := (AddrA+2)^ + (AddrB+2)^ * Value;
+    (AddrA+3)^ := (AddrA+3)^ + (AddrB+3)^ * Value;
+    (AddrA+4)^ := (AddrA+4)^ + (AddrB+4)^ * Value;
+    (AddrA+5)^ := (AddrA+5)^ + (AddrB+5)^ * Value;
+    (AddrA+6)^ := (AddrA+6)^ + (AddrB+6)^ * Value;
+    (AddrA+7)^ := (AddrA+7)^ + (AddrB+7)^ * Value;
+    BasePos := BasePos + 8;
+    AddrA := AddrA + 8;
+    AddrB := AddrB + 8;
+  end;
+
+  while BasePos <= vHigh - 3 do
+  begin
+    (AddrA)^   := (AddrA)^   + (AddrB)^   * Value;
+    (AddrA+1)^ := (AddrA+1)^ + (AddrB+1)^ * Value;
+    (AddrA+2)^ := (AddrA+2)^ + (AddrB+2)^ * Value;
+    (AddrA+3)^ := (AddrA+3)^ + (AddrB+3)^ * Value;
+    BasePos := BasePos + 4;
+    AddrA := AddrA + 4;
+    AddrB := AddrB + 4;
+  end;
+  {$ENDIF}
+
+  if BasePos <= vHigh then for I := BasePos to vHigh do
     {$IFDEF FPC}
     PtrA^[I] += PtrB^[I]*Value;
     {$ELSE}
@@ -2661,14 +2895,99 @@ begin
     {$ENDIF}
 end;
 
+class procedure TVolume.MulMulAdd(PtrA, PtrB: TNeuralFloatArrPtr; Value1,
+  Value2: T; pSize: integer);
+var
+  I: integer;
+  vHigh: integer;
+  BasePos: integer;
+  AddrA, AddrB: TNeuralFloatPtr;
+begin
+  BasePos := 0;
+  vHigh := pSize - 1;
+  {$IFDEF FPC}
+  AddrA := pointer(PtrA);
+  AddrB := pointer(PtrB);
+  while BasePos <= vHigh - 7 do
+  begin
+    (AddrA)^   := (AddrA)^   * Value1 + (AddrB)^   * Value2;
+    (AddrA+1)^ := (AddrA+1)^ * Value1 + (AddrB+1)^ * Value2;
+    (AddrA+2)^ := (AddrA+2)^ * Value1 + (AddrB+2)^ * Value2;
+    (AddrA+3)^ := (AddrA+3)^ * Value1 + (AddrB+3)^ * Value2;
+    (AddrA+4)^ := (AddrA+4)^ * Value1 + (AddrB+4)^ * Value2;
+    (AddrA+5)^ := (AddrA+5)^ * Value1 + (AddrB+5)^ * Value2;
+    (AddrA+6)^ := (AddrA+6)^ * Value1 + (AddrB+6)^ * Value2;
+    (AddrA+7)^ := (AddrA+7)^ * Value1 + (AddrB+7)^ * Value2;
+    BasePos := BasePos + 8;
+    AddrA := AddrA + 8;
+    AddrB := AddrB + 8;
+  end;
+
+  while BasePos <= vHigh - 3 do
+  begin
+    (AddrA)^   := (AddrA)^   * Value1 + (AddrB)^   * Value2;
+    (AddrA+1)^ := (AddrA+1)^ * Value1 + (AddrB+1)^ * Value2;
+    (AddrA+2)^ := (AddrA+2)^ * Value1 + (AddrB+2)^ * Value2;
+    (AddrA+3)^ := (AddrA+3)^ * Value1 + (AddrB+3)^ * Value2;
+    BasePos := BasePos + 4;
+    AddrA := AddrA + 4;
+    AddrB := AddrB + 4;
+  end;
+  {$ENDIF}
+  if BasePos <= vHigh then for I := BasePos to vHigh do
+    PtrA^[I] := PtrA^[I] * Value1 + PtrB^[I] * Value2;
+end;
+
+
+class procedure TVolume.MulAdd(PtrA, PtrB: TNeuralFloatArrPtr; Value: T;
+  pSize: integer);
+begin
+  Self.MulAddPPVS(PtrA, PtrB, Value, pSize);
+end;
+
 class procedure TVolume.MulAdd(PtrA, PtrB, PtrC: TNeuralFloatArrPtr;
   pSize: integer);
 var
   I: integer;
   vHigh: integer;
+  BasePos: integer;
+  AddrA, AddrB, AddrC: TNeuralFloatPtr;
 begin
+  BasePos := 0;
+  AddrA := pointer(PtrA);
+  AddrB := pointer(PtrB);
+  AddrC := pointer(PtrC);
   vHigh := pSize - 1;
-  for I := 0 to vHigh do
+  {$IFDEF FPC}
+  while BasePos <= vHigh - 7 do
+  begin
+    (AddrA)^   := (AddrA)^   + (AddrB)^   * (AddrC)^;
+    (AddrA+1)^ := (AddrA+1)^ + (AddrB+1)^ * (AddrC+1)^;
+    (AddrA+2)^ := (AddrA+2)^ + (AddrB+2)^ * (AddrC+2)^;
+    (AddrA+3)^ := (AddrA+3)^ + (AddrB+3)^ * (AddrC+3)^;
+    (AddrA+4)^ := (AddrA+4)^ + (AddrB+4)^ * (AddrC+4)^;
+    (AddrA+5)^ := (AddrA+5)^ + (AddrB+5)^ * (AddrC+5)^;
+    (AddrA+6)^ := (AddrA+6)^ + (AddrB+6)^ * (AddrC+6)^;
+    (AddrA+7)^ := (AddrA+7)^ + (AddrB+7)^ * (AddrC+7)^;
+    BasePos := BasePos + 8;
+    AddrA := AddrA + 8;
+    AddrB := AddrB + 8;
+    AddrC := AddrC + 8;
+  end;
+
+  while BasePos <= vHigh - 3 do
+  begin
+    (AddrA)^   := (AddrA)^   + (AddrB)^   * (AddrC)^;
+    (AddrA+1)^ := (AddrA+1)^ + (AddrB+1)^ * (AddrC+1)^;
+    (AddrA+2)^ := (AddrA+2)^ + (AddrB+2)^ * (AddrC+2)^;
+    (AddrA+3)^ := (AddrA+3)^ + (AddrB+3)^ * (AddrC+3)^;
+    BasePos := BasePos + 4;
+    AddrA := AddrA + 4;
+    AddrB := AddrB + 4;
+    AddrC := AddrC + 4;
+  end;
+  {$ENDIF}
+  if BasePos <= vHigh then for I := BasePos to vHigh do
     {$IFDEF FPC}
     PtrA^[I] += PtrB^[I]*PtrC^[I];
     {$ELSE}
@@ -3155,6 +3474,7 @@ var
   RatioX, RatioY: TNeuralFloat;
   CntX, CntY: integer;
   MaxX, MaxY: integer;
+  OrigMaxX, OrigMaxY: integer;
   OrigPosX, OrigPosY: integer;
   MoveSizeBytes: integer;
   RawPostDest, RawPosSource: integer;
@@ -3165,14 +3485,16 @@ begin
 
   MaxX := SizeX - 1;
   MaxY := SizeY - 1;
+  OrigMaxX := Original.SizeX - 1;
+  OrigMaxY := Original.SizeY - 1;
   MoveSizeBytes := Depth * SizeOf(T);
 
   for CntX := 0 to MaxX do
   begin
-    OrigPosX := Round(CntX / RatioX);
+    OrigPosX := Min(OrigMaxX, Round(CntX / RatioX));
     for CntY := 0 to MaxY do
     begin
-      OrigPosY := Round(CntY / RatioY);
+      OrigPosY := Min(OrigMaxY, Round(CntY / RatioY));
       RawPostDest := GetRawPos(CntX, CntY);
       RawPosSource := Original.GetRawPos(OrigPosX, OrigPosY);
       Move(Original.FData[RawPosSource], FData[RawPostDest], MoveSizeBytes);
@@ -3181,19 +3503,13 @@ begin
 end;
 
 function TVolume.DotProduct(Original: TVolume): T;
-var
-  I: integer;
-  vHigh: integer;
 begin
   {$IFDEF Debug}
   if Original.Size <> Self.Size then
     raise Exception.Create('Sizes don''t match at DotProduct: ' +
       IntToStr(Self.Size) + ' and ' + IntToStr(Original.Size) + ' .');
   {$ENDIF}
-  Result := 0;
-  vHigh := High(FData);
-  for I := 0 to vHigh do
-    Result := Result + FData[I] * Original.FData[I];
+  Result := Self.DotProduct(Addr(Self.FData[0]), Addr(Original.FData[0]), Self.Size);
 end;
 
 function TVolume.SumDiff(Original: TVolume): T;
@@ -3213,6 +3529,26 @@ begin
   begin
     AuxDiff := FData[I] - Original.FData[I];
     Result := Result + Abs(AuxDiff);
+  end;
+end;
+
+procedure TVolume.DebugDiff(Original: TVolume; Limit: Single);
+var
+  I: integer;
+  vHigh: integer;
+  AuxDiff: Single;
+begin
+  if Original.Size <> Self.Size then
+    raise Exception.Create('Sizes don''t match at DebugDiff: ' +
+      IntToStr(Self.Size) + ' and ' + IntToStr(Original.Size) + ' .');
+  vHigh := High(FData);
+  for I := 0 to vHigh do
+  begin
+    AuxDiff := FData[I] - Original.FData[I];
+    if AuxDiff > Limit then
+    begin
+      WriteLn('Diff at pos ', I, ':', AuxDiff,'. Self:', FData[I], ' Original:', Original.FData[I]);
+    end;
   end;
 end;
 
@@ -3458,6 +3794,31 @@ begin
   end;
 end;
 
+function TVolume.GetSumAbs(): T;
+var
+  I: integer;
+  vHigh: integer;
+begin
+  if Length(FData) > 0 then
+  begin
+    if FData[0] >0 then Result := FData[0] else Result := -FData[0];
+    vHigh := High(FData);
+    if vHigh > 0 then
+    begin
+      for I := 1 to vHigh do
+      begin
+        if FData[I] > 0
+          then Result := Result + FData[I]
+          else Result := Result - FData[I];
+      end;
+    end;
+  end
+  else
+  begin
+    Result := 0;
+  end;
+end;
+
 function TVolume.GetSumSqr(): T;
 var
   I: integer;
@@ -3614,6 +3975,11 @@ var
   I: integer;
 begin
   for I := Low(FTag) to High(FTag) do FTag[I] := 0;
+end;
+
+function TVolume.NeuralToStr(V: TNeuralFloat): string;
+begin
+  Result := FloatToStr(V, FFormatSettings);
 end;
 
 procedure TVolume.RgbImgToNeuronalInput(color_encoding: integer);
@@ -4547,8 +4913,10 @@ begin
   MaxA := NumAs - 1;
   MaxB := NumBs - 1;
 
-  localNumElements := (VectorSize div 4) * 4;
-  MissedElements := VectorSize - localNumElements;
+  //localNumElements := (VectorSize div 4) * 4;
+  //MissedElements := VectorSize - localNumElements;
+  MissedElements := VectorSize and 3;
+  localNumElements := VectorSize xor MissedElements;
 
   for CntB := 0 to MaxB do
   begin
@@ -4786,7 +5154,297 @@ begin
       FData[CntB * NumAs + CntA] := Result;
     end;
   end;
+end;
 
+procedure TNNetVolume.DotProductsTiled(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
+var
+  CntA, CntB, CntAPos, CntBPos, MaxA, MaxB: integer;
+  DestPointer: pointer;
+  CntBVectorSizePlusCntBPos: integer;
+  vRes: array[0..3] of Single;
+  localNumElements, MissedElements: integer;
+  PtrA, PtrB: TNeuralFloatArrPtr;
+  Result: TNeuralFloat;
+  // Tiling
+  TileACnt, TileBCnt: integer;
+  StartTileA, EndTileA, StartTileB, EndTileB: integer;
+  MaxTileA, MaxTileB: integer;
+begin
+  MaxA := NumAs - 1;
+  MaxB := NumBs - 1;
+
+  //localNumElements := (VectorSize div 4) * 4;
+  //MissedElements := VectorSize - localNumElements;
+  MissedElements := VectorSize and 3;
+  localNumElements := VectorSize xor MissedElements;
+  MaxTileA := (NumAs div TileSizeA) - 1;
+  MaxTileB := (NumBs div TileSizeB) - 1;
+  for TileBCnt := 0 to MaxTileB do
+  begin
+    StartTileB := TileBCnt * TileSizeB;
+    EndTileB := StartTileB + TileSizeB - 1;
+    for TileACnt := 0 to MaxTileA do
+    begin
+      StartTileA := TileACnt * TileSizeA;
+      EndTileA := StartTileA + TileSizeA - 1;
+      for CntB := StartTileB to EndTileB do
+      begin
+        PtrB := VBs.GetRawPtr(CntB*VectorSize);
+        for CntA := StartTileA to EndTileA do
+        begin
+          PtrA := VAs.GetRawPtr(CntA*VectorSize);
+
+          {$IFDEF AVXANY}
+          {$IFDEF AVX32}
+          if localNumElements > 0 then
+          begin
+          asm
+          mov ecx, localNumElements
+          mov eax, PtrA
+          mov edx, PtrB
+          vxorps ymm0, ymm0, ymm0
+
+          push ecx
+          shr ecx,5  // number of large iterations = number of elements / 32
+          jz @SkipLargeAddLoop
+          vxorps ymm1, ymm1, ymm1
+          vxorps ymm2, ymm2, ymm2
+          vxorps ymm3, ymm3, ymm3
+        @LargeAddLoop:
+
+          vmovups ymm4, [eax]
+          vmovups ymm5, [eax+32]
+          vmovups ymm6, [eax+64]
+          vmovups ymm7, [eax+96]
+
+          {$IFDEF AVX2}
+          vfmadd231ps ymm0, ymm4, [edx]
+          vfmadd231ps ymm1, ymm5, [edx+32]
+          vfmadd231ps ymm2, ymm6, [edx+64]
+          vfmadd231ps ymm3, ymm7, [edx+96]
+          {$ELSE}
+          vmulps  ymm4, ymm4, [edx]
+          vmulps  ymm5, ymm5, [edx+32]
+          vmulps  ymm6, ymm6, [edx+64]
+          vmulps  ymm7, ymm7, [edx+96]
+
+          vaddps  ymm0, ymm0, ymm4
+          vaddps  ymm1, ymm1, ymm5
+          vaddps  ymm2, ymm2, ymm6
+          vaddps  ymm3, ymm3, ymm7
+          {$ENDIF}
+
+          add eax, 128
+          add edx, 128
+          dec ecx
+          jnz @LargeAddLoop
+
+          vaddps ymm2, ymm2, ymm3
+          vaddps ymm0, ymm0, ymm1
+          vaddps ymm0, ymm0, ymm2
+          VEXTRACTF128 xmm2, ymm0, 1
+
+          vzeroupper
+          addps xmm0, xmm2
+
+        @SkipLargeAddLoop:
+          pop ecx
+          and ecx,$0000001F
+          jz @EndAdd
+          shr ecx, 2 // number of small iterations = (number of elements modulo 16) / 4
+        @SmallAddLoop:
+          vzeroupper
+
+          movups xmm2, [eax]
+          movups xmm3, [edx]
+          mulps xmm2, xmm3
+          addps xmm0, xmm2
+
+          add eax, 16
+          add edx, 16
+          dec ecx
+          jnz @SmallAddLoop
+
+        @EndAdd:
+          // Sums all elements of xmm0 into the first position
+          HADDPS xmm0,xmm0
+          HADDPS xmm0,xmm0
+
+          movups vRes, xmm0
+          end
+          [
+            'EAX', 'ECX', 'EDX',
+            'ymm0', 'ymm1', 'ymm2', 'ymm3', 'ymm4', 'ymm5', 'ymm6', 'ymm7'
+          ];
+
+            Result := vRes[0];
+          end else
+          begin
+            Result := 0;
+          end;
+          {$ENDIF}
+          {$IFDEF AVX64}
+          //Write(localNumElements,' ',MissedElements);
+          if localNumElements > 0 then
+          begin
+          asm
+          mov ecx, localNumElements
+          mov rax, PtrA
+          mov rdx, PtrB
+          {$IFDEF AVX512}
+          vxorps zmm0, zmm0, zmm0
+          {$ELSE}
+          vxorps ymm0, ymm0, ymm0
+          {$ENDIF}
+
+          push rcx
+          shr ecx,5  // number of large iterations = number of elements / 32
+          jz @SkipLargeAddLoop
+
+          {$IFDEF AVX512}
+          vxorps zmm1, zmm1, zmm1
+          {$ELSE}
+          vxorps ymm1, ymm1, ymm1
+          {$ENDIF}
+
+        @LargeAddLoop:
+
+          {$IFDEF AVX512}
+          vmovups zmm2, [rax]
+          vmovups zmm3, [rax+64]
+
+          vmulps  zmm2, zmm2, [rdx]
+          vmulps  zmm3, zmm3, [rdx+64]
+
+          vaddps  zmm0, zmm0, zmm2
+          vaddps  zmm1, zmm1, zmm3
+          {$ELSE}
+            vmovups ymm2, [rax]
+            vmovups ymm3, [rax+32]
+            vmovups ymm4, [rax+64]
+            vmovups ymm5, [rax+96]
+
+            {$IFDEF AVX2}
+            vfmadd231ps ymm0, ymm2, [rdx]
+            vfmadd231ps ymm1, ymm3, [rdx+32]
+            vfmadd231ps ymm0, ymm4, [rdx+64]
+            vfmadd231ps ymm1, ymm5, [rdx+96]
+            {$ELSE}
+            vmulps  ymm2, ymm2, [rdx]
+            vmulps  ymm3, ymm3, [rdx+32]
+            vmulps  ymm4, ymm4, [rdx+64]
+            vmulps  ymm5, ymm5, [rdx+96]
+
+            vaddps  ymm0, ymm0, ymm2
+            vaddps  ymm1, ymm1, ymm3
+            vaddps  ymm0, ymm0, ymm4
+            vaddps  ymm1, ymm1, ymm5
+            {$ENDIF}
+          {$ENDIF}
+
+          add rax, 128
+          add rdx, 128
+          dec ecx
+          jnz @LargeAddLoop
+
+          {$IFDEF AVX512}
+          vaddps zmm0, zmm0, zmm1
+          VEXTRACTF32x4 xmm2, zmm0, 1
+          VEXTRACTF32x4 xmm3, zmm0, 2
+          VEXTRACTF32x4 xmm4, zmm0, 3
+          vzeroupper
+          addps  xmm0, xmm2
+          addps  xmm0, xmm3
+          addps  xmm0, xmm4
+          {$ELSE}
+          vaddps ymm0, ymm0, ymm1
+          VEXTRACTF128 xmm2, ymm0, 1
+          vzeroupper
+          addps  xmm0, xmm2
+          {$ENDIF}
+
+        @SkipLargeAddLoop:
+          pop rcx
+          and ecx,$0000001F
+          jz @EndAdd
+          shr ecx, 2 // number of small iterations = (number of elements modulo 16) / 4
+        @SmallAddLoop:
+          vzeroupper
+
+          movups xmm2, [rax]
+          movups xmm3, [rdx]
+          mulps xmm2, xmm3
+          addps xmm0, xmm2
+
+          add rax, 16
+          add rdx, 16
+          dec ecx
+          jnz @SmallAddLoop
+
+        @EndAdd:
+          vzeroupper
+          // Sums all elements of xmm0 into the first position
+          HADDPS xmm0,xmm0
+          HADDPS xmm0,xmm0
+
+          movups vRes, xmm0
+          end
+          [
+            'RAX', 'RCX', 'RDX',
+            'ymm0', 'ymm1', 'ymm2', 'ymm3', 'ymm4', 'ymm5'
+            {$IFDEF AVX512},'zmm0', 'zmm1'{$ENDIF}
+          ];
+
+            Result := vRes[0];
+          end else
+          begin
+            Result := 0;
+          end;
+          {$ENDIF}
+          //Write(' A:', PtrA^[0],' B:', PtrB^[0],' -> ',Result);
+          if MissedElements>0 then
+          begin
+            if MissedElements = 1
+            then Result += PtrA^[localNumElements] * PtrB^[localNumElements]
+            else if MissedElements = 2
+            then Result +=
+                   PtrA^[localNumElements] * PtrB^[localNumElements] +
+                   PtrA^[localNumElements+1] * PtrB^[localNumElements+1]
+            else Result +=
+                   PtrA^[localNumElements] * PtrB^[localNumElements] +
+                   PtrA^[localNumElements+1] * PtrB^[localNumElements+1] +
+                   PtrA^[localNumElements+2] * PtrB^[localNumElements+2];
+          end;
+          //WriteLn(' ', Result);
+          {$ENDIF}
+          {$IFNDEF AVXANY}
+          Result := DotProduct(PtrA, PtrB, VectorSize);
+          {$ENDIF}
+          FData[CntB * NumAs + CntA] := Result;
+        end;
+      end;
+
+    end; // A Tiling.
+  end; // B Tiling.
+end;
+
+procedure TNNetVolume.AddArea(DestX, DestY, OriginX, OriginY, LenX,
+  LenY: integer; Original: TNNetVolume);
+var
+  CntY: integer;
+  SizeXDepth: integer;
+  PtrA, PtrB: Pointer;
+begin
+  if Self.Depth = Original.Depth then
+  begin
+    SizeXDepth := LenX * Self.Depth;
+    for CntY := 0 to LenY - 1 do
+    begin
+      PtrA := Self.GetRawPtr(DestX, DestY+CntY);
+      PtrB := Original.GetRawPtr(OriginX, OriginY+CntY);
+      Add(PtrA, PtrB, SizeXDepth);
+    end;
+  end;
 end;
 
 function TNNetVolume.HasAVX: boolean;
@@ -8019,13 +8677,59 @@ class function TVolume.DotProduct(PtrA, PtrB: TNeuralFloatArrPtr; NumElements: i
   ): Single;
 var
   I: integer;
-  vHigh: integer;
+  BasePos, vHigh: integer;
+  AddrA, AddrB: TNeuralFloatPtr;
 begin
   Result := 0;
+  BasePos := 0;
   vHigh := NumElements - 1;
-  for I := 0 to vHigh do
+  {$IFDEF FPC}
+  AddrA := pointer(PtrA);
+  AddrB := pointer(PtrB);
+  while BasePos <= vHigh - 7 do
+  begin
+    Result := Result +
+      (AddrA)^   * (AddrB)^ +
+      (AddrA+1)^ * (AddrB+1)^ +
+      (AddrA+2)^ * (AddrB+2)^ +
+      (AddrA+3)^ * (AddrB+3)^ +
+      (AddrA+4)^ * (AddrB+4)^ +
+      (AddrA+5)^ * (AddrB+5)^ +
+      (AddrA+6)^ * (AddrB+6)^ +
+      (AddrA+7)^ * (AddrB+7)^ ;
+    BasePos := BasePos + 8;
+    AddrA := AddrA + 8;
+    AddrB := AddrB + 8;
+  end;
+
+  while BasePos <= vHigh - 3 do
+  begin
+    Result := Result +
+      (AddrA)^   * (AddrB)^ +
+      (AddrA+1)^ * (AddrB+1)^ +
+      (AddrA+2)^ * (AddrB+2)^ +
+      (AddrA+3)^ * (AddrB+3)^;
+    BasePos := BasePos + 4;
+    AddrA := AddrA + 4;
+    AddrB := AddrB + 4;
+  end;
+  {$ENDIF}
+
+  if BasePos <= vHigh then for I := BasePos to vHigh do
     //Uncomment for debugging only: WriteLn(PtrA^[I]:8:6,' # ', PtrB^[I]:8:6,' # ', Result:8:6);
     Result := Result + PtrA^[I] * PtrB^[I];
+end;
+
+class function TVolume.Product(PtrA: TNeuralFloatArrPtr;
+  NumElements: integer): Single;
+var
+  I: integer;
+  vHigh: integer;
+begin
+  Result := 1;
+  vHigh := NumElements - 1;
+  for I := 0 to vHigh do
+    Result := Result * PtrA^[I];
 end;
 
 {$IFNDEF FPC}

@@ -19,10 +19,16 @@ uses {$IFDEF UNIX} {$IFDEF UseCThreads}
   neuraldatasets,
   neuralfit;
 
+const
+  // Padding and cropping constants.
+  csPadding = 4;
+  csCropSize = csPadding * 2;
+
 type
   TTestCNNAlgo = class(TCustomApplication)
   protected
     fLearningRate, fInertia, fTarget: single;
+    bPaddingCropping: boolean;
     bSeparable: boolean;
     iInnerConvNum: integer;
     iBottleneck: integer;
@@ -68,6 +74,7 @@ type
     end;
 
     bSeparable := HasOption('s', 'separable');
+    bPaddingCropping := HasOption('p', 'padding');
 
     iInnerConvNum := 12;
     if HasOption('c', 'convolutions') then
@@ -112,12 +119,15 @@ type
     HasMovingNorm := true;
     NN.AddLayer( TNNetInput.Create(32, 32, 3).EnableErrorCollection() );
     // First block shouldn't be separable.
-    NN.AddDenseNetBlockCAI(iInnerConvNum div 6, iConvNeuronCount, {supressBias=}0, TNNetConvolutionReLU, {IsSeparable=}false, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
-    NN.AddDenseNetBlockCAI(iInnerConvNum div 6, iConvNeuronCount, {supressBias=}0, TNNetConvolutionReLU, {IsSeparable=}bSeparable, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddDenseNetBlockCAI(iInnerConvNum div 6, iConvNeuronCount, {supressBias=}1, TNNetConvolutionReLU, {IsSeparable=}false, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddDenseNetBlockCAI(iInnerConvNum div 6, iConvNeuronCount, {supressBias=}1, TNNetConvolutionReLU, {IsSeparable=}bSeparable, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddCompression(1);
     NN.AddLayer( TNNetMaxPool.Create(2) );
-    NN.AddDenseNetBlockCAI(iInnerConvNum div 3, iConvNeuronCount, {supressBias=}0, TNNetConvolutionReLU, {IsSeparable=}bSeparable, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddDenseNetBlockCAI(iInnerConvNum div 3, iConvNeuronCount, {supressBias=}1, TNNetConvolutionReLU, {IsSeparable=}bSeparable, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddCompression(1);
     NN.AddLayer( TNNetMaxPool.Create(2) );
-    NN.AddDenseNetBlockCAI(iInnerConvNum div 3, iConvNeuronCount, {IsSeparable=}0, TNNetConvolutionReLU, {IsSeparable=}bSeparable, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddDenseNetBlockCAI(iInnerConvNum div 3, iConvNeuronCount, {IsSeparable=}1, TNNetConvolutionReLU, {IsSeparable=}bSeparable, {HasMovingNorm=}HasMovingNorm, {pBeforeNorm=}nil, {pAfterNorm=}nil, {BottleNeck=}iBottleneck, {Compression=}0, {Dropout=}0, {RandomAdd=}1, {RandomMul=}1);
+    NN.AddCompression(1);
     NN.AddLayer( TNNetDropout.Create(0.25) );
     NN.AddLayer( TNNetMaxChannel.Create() );
     NN.AddLayer( TNNetFullConnectLinear.Create(NumClasses) );
@@ -130,14 +140,42 @@ type
 
     CreateCifar10Volumes(ImgTrainingVolumes, ImgValidationVolumes, ImgTestVolumes);
 
+    if bPaddingCropping then
+    begin
+      // Add padding to dataset
+      WriteLn
+      (
+        'Original image size: ',
+        ImgTrainingVolumes[0].SizeX,',',
+        ImgTrainingVolumes[0].SizeY,' px.'
+      );
+      ImgTrainingVolumes.AddPadding(csPadding);
+      ImgValidationVolumes.AddPadding(csPadding);
+      ImgTestVolumes.AddPadding(csPadding);
+      WriteLn
+      (
+        'New image size after padding: ',
+        ImgTrainingVolumes[0].SizeX,',',
+        ImgTrainingVolumes[0].SizeY,' px.'
+      );
+    end;
+
     WriteLn('Neural Network will minimize error with:');
     WriteLn(' Layers: ', NN.CountLayers());
     WriteLn(' Neurons:', NN.CountNeurons());
-    WriteLn(' Weights:' ,NN.CountWeights());
+    WriteLn(' Weights:', NN.CountWeights());
     NN.DebugWeights();
     NN.DebugStructure();
 
     NeuralFit := TNeuralImageFit.Create;
+
+    if bPaddingCropping then
+    begin
+      // Enable cropping while fitting.
+      NeuralFit.HasImgCrop := true;
+      NeuralFit.MaxCropSize := csCropSize;
+    end;
+
     NeuralFit.FileNameBase := fileNameBase;
     NeuralFit.InitialLearningRate := fLearningRate;
     NeuralFit.LearningRateDecay := 0.02;
@@ -173,6 +211,7 @@ type
       ' -c : defines the number of convolutions. Default is 12.', sLineBreak,
       ' -b : defines the bottleneck. Default is 32.', sLineBreak,
       ' -n : defines convolutional neurons (growth rate). Default is 32.', sLineBreak,
+      ' -p : enables padding and cropping data augmentation.', sLineBreak,
       ' https://github.com/joaopauloschuler/neural-api/tree/master/examples/CaiOptimizedDenseNet',sLineBreak,
       ' More info at:',sLineBreak,
       '   https://github.com/joaopauloschuler/neural-api'
@@ -183,7 +222,7 @@ var
   Application: TTestCNNAlgo;
 begin
   Application := TTestCNNAlgo.Create(nil);
-  Application.Title:='CIFAR-10 Cai Optimized DenseNet Example';
+  Application.Title:='CIFAR-10 Classification Example';
   Application.Run;
   Application.Free;
 end.

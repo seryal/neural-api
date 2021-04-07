@@ -47,12 +47,13 @@ type
   TNeuralFitBase = class(TMObject)
     protected
       FBatchSize: integer;
-      FMaxThreadNum, FThreadNum: integer;
+      FMaxThreadNum, FDefaultThreadCount, FThreadNum: integer;
       FThreadNN: TNNetDataParallelism;
       FAvgWeights: TNNetDataParallelism;
       FAvgWeight: TNNet;
       FAvgWeightEpochCount: integer;
       FCurrentEpoch: integer;
+      FCurrentStep: integer;
       FNN: TNNet;
       FGlobalHit: integer;
       FGlobalMiss: integer;
@@ -102,6 +103,7 @@ type
       property AvgNN: TNNet read FAvgWeight;
       property ClipDelta: single read FClipDelta write FClipDelta;
       property CurrentEpoch: integer read FCurrentEpoch;
+      property CurrentStep: integer read FCurrentStep;
       property CurrentLearningRate: single read FCurrentLearningRate;
       property CustomLearningRateScheduleFn: TCustomLearningRateScheduleFn read FCustomLearningRateScheduleFn write FCustomLearningRateScheduleFn;
       property CustomLearningRateScheduleObjFn: TCustomLearningRateScheduleObjFn read FCustomLearningRateScheduleObjFn write FCustomLearningRateScheduleObjFn;
@@ -159,6 +161,7 @@ type
 
       procedure EnableMonopolarHitComparison();
       procedure EnableBipolarHitComparison();
+      procedure EnableBipolar99HitComparison();
       procedure EnableClassComparison();
 
       // On most cases, you should never call the following methods directly
@@ -233,6 +236,7 @@ type
 
   function MonopolarCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
   function BipolarCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
+  function BipolarCompare99(A, B: TNNetVolume; ThreadId: integer): boolean;
   function ClassCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
 
 implementation
@@ -275,6 +279,25 @@ begin
     );
     Inc(Pos);
   end;
+end;
+
+function BipolarCompare99(A, B: TNNetVolume; ThreadId: integer): boolean;
+var
+  Pos, Hits: integer;
+  ACount: integer;
+begin
+  ACount := Min(A.Size, B.Size);
+  Pos := 0;
+  Hits := 0;
+  while (Pos < ACount) do
+  begin
+    if (
+      ( (A.FData[Pos]>0) and (B.FData[Pos]>0) ) or
+      ( (A.FData[Pos]<0) and (B.FData[Pos]<0) )
+    ) then Inc(Hits);
+    Inc(Pos);
+  end;
+  Result := (Hits > Round(ACount*0.99));
 end;
 
 function ClassCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
@@ -403,6 +426,7 @@ begin
         startTime := Now();
       end;
       if Assigned(FOnAfterStep) then FOnAfterStep(Self);
+      Inc(FCurrentStep);
     end;
 
     Inc(FCurrentEpoch);
@@ -445,7 +469,7 @@ begin
           FAvgWeight.SaveToFile(fileName);
         end;
 
-        if (FGlobalHit > 0) and (FVerbose) then
+        if (FGlobalTotal > 0) and (FVerbose) then
         begin
           WriteLn(
             'Epochs: ',FCurrentEpoch,
@@ -543,8 +567,8 @@ begin
       Append(CSVFile);
 
       MessageProc(
-        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(50000/(FStepSize*10))/60,ffGeneral,1,4)+' minutes.' +
-        ' 100 epochs: ' + FloatToStrF( 100*totalTimeSeconds*(50000/(FStepSize*10))/3600,ffGeneral,1,4)+' hours.');
+        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*10))/60,ffGeneral,1,4)+' minutes.' +
+        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*10))/3600,ffGeneral,1,4)+' hours.');
 
       MessageProc(
         'Epochs: '+IntToStr(FCurrentEpoch)+
@@ -658,6 +682,9 @@ var
   LocalHit, LocalMiss: integer;
   LocalTotalLoss, LocalErrorSum: TNeuralFloat;
   LocalTrainingPair: TNNetVolumePair;
+  {$IFDEF DEBUG}
+  InitialWeightSum, FinalWeightSum: TNeuralFloat;
+  {$ENDIF}
 begin
   vInput  := TNNetVolume.Create();
   pOutput := TNNetVolume.Create();
@@ -678,6 +705,9 @@ begin
   LocalNN.ClearTime();
   LocalNN.ClearDeltas();
   LocalNN.EnableDropouts(true);
+  {$IFDEF DEBUG}
+  InitialWeightSum := LocalNN.GetWeightSum();
+  {$ENDIF}
   for I := 1 to BlockSize do
   begin
     if FShouldQuit then Break;
@@ -752,7 +782,13 @@ begin
       {$ENDIF}
     end;
   end;
-
+  {$IFDEF DEBUG}
+  FinalWeightSum := LocalNN.GetWeightSum();
+  if InitialWeightSum <> FinalWeightSum then
+  begin
+    FErrorProc('Weights changed on thread:'+FloatToStr(FinalWeightSum - InitialWeightSum));
+  end;
+  {$ENDIF}
   {$IFDEF HASTHREADS}EnterCriticalSection(FCritSec);{$ENDIF}
   FGlobalHit       := FGlobalHit + LocalHit;
   FGlobalMiss      := FGlobalMiss + LocalMiss;
@@ -866,7 +902,7 @@ begin
   {$ENDIF}
   FCurrentEpoch := FInitialEpoch;
   FCurrentLearningRate := FInitialLearningRate;
-  FThreadNum := FMaxThreadNum;
+  FThreadNum := Min(FMaxThreadNum, FDefaultThreadCount);
   FBatchSize := pBatchSize;
   if FBatchSize >= FThreadNum then
   begin
@@ -961,7 +997,9 @@ begin
     MaxDelta := FNN.NormalizeMaxAbsoluteDelta();
     if MaxDelta < 1 then
     begin
-      MessageProc('Deltas have been multiplied by:'+FloatToStr(MaxDelta) );
+      MessageProc('Deltas have been multiplied by: '+FloatToStr(MaxDelta)+'.'+
+      ' Max delta on layer: '+IntToStr(FNN.MaxDeltaLayer)+' - '+
+      FNN.Layers[FNN.MaxDeltaLayer].ClassName+'.');
     end;
   end;
   FNN.UpdateWeights();
@@ -1016,6 +1054,11 @@ begin
   FInferHitFn := @BipolarCompare;
 end;
 
+procedure TNeuralDataLoadingFit.EnableBipolar99HitComparison();
+begin
+  FInferHitFn := @BipolarCompare99;
+end;
+
 procedure TNeuralDataLoadingFit.EnableClassComparison();
 begin
   FInferHitFn := @ClassCompare;
@@ -1042,6 +1085,7 @@ begin
   {$ELSE}
   FMaxThreadNum := 1;
   {$ENDIF}
+  FDefaultThreadCount := FMaxThreadNum;
   FDataAugmentation := true;
   FMultipleSamplesAtValidation := true;
   FVerbose := true;
@@ -1069,6 +1113,7 @@ begin
   FRunning := false;
   FShouldQuit := false;
   FCurrentEpoch := 0;
+  FCurrentStep := 0;
 end;
 
 destructor TNeuralFitBase.Destroy();
@@ -1198,11 +1243,12 @@ begin
   FMaxThreadNum := 1;
   {$ENDIF}
   FCurrentEpoch := FInitialEpoch;
+  FCurrentStep := 0;
   FCurrentLearningRate := FInitialLearningRate;
   FImgVolumes := pImgVolumes;
   FImgValidationVolumes := pImgValidationVolumes;
   FImgTestVolumes := pImgTestVolumes;
-  FThreadNum := FMaxThreadNum;
+  FThreadNum := Min(FMaxThreadNum, FDefaultThreadCount);
   FBatchSize := pBatchSize;
   FMaxEpochs := Epochs;
   if FBatchSize >= FThreadNum then
@@ -1310,7 +1356,9 @@ begin
         MaxDelta := FNN.NormalizeMaxAbsoluteDelta();
         if MaxDelta < 1 then
         begin
-          MessageProc('Deltas have been multiplied by:'+FloatToStr(MaxDelta) );
+          MessageProc('Deltas have been multiplied by: '+FloatToStr(MaxDelta)+'.'+
+          ' Max delta on layer: '+IntToStr(FNN.MaxDeltaLayer)+' - '+
+          FNN.Layers[FNN.MaxDeltaLayer].ClassName+'.');
         end;
       end;
       FNN.UpdateWeights();
@@ -1358,6 +1406,7 @@ begin
         startTime := Now();
       end;
       if Assigned(FOnAfterStep) then FOnAfterStep(Self);
+      Inc(FCurrentStep);
     end;
 
     Inc(FCurrentEpoch);
@@ -1525,8 +1574,8 @@ begin
       Append(CSVFile);
 
       MessageProc(
-        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(50000/(FStepSize*10))/60,ffGeneral,1,4)+' minutes.' +
-        ' 100 epochs: ' + FloatToStrF( 100*totalTimeSeconds*(50000/(FStepSize*10))/3600,ffGeneral,1,4)+' hours.');
+        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/60,ffGeneral,1,4)+' minutes.' +
+        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/3600,ffGeneral,1,4)+' hours.');
 
       MessageProc(
         'Epochs: '+IntToStr(FCurrentEpoch)+
@@ -1782,7 +1831,7 @@ begin
         sumOutput.Add( pOutput );
       end;
 
-      if FMaxCropSize >= 2 then
+      if ((FMaxCropSize >= 2) and Not(FHasImgCrop)) then
       begin
         ImgInputCp.CopyCropping(ImgInput, FMaxCropSize div 2, FMaxCropSize div 2, ImgInput.SizeX - FMaxCropSize, ImgInput.SizeY - FMaxCropSize);
         ImgInput.CopyResizing(ImgInputCp, ImgInput.SizeX, ImgInput.SizeY);

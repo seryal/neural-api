@@ -307,15 +307,16 @@ begin
       TNNetConvolutionReLU.Create(128 * NeuronMultiplier,3,1,1,0),
       TNNetMovingStdNormalization.Create(),
       TNNetDeMaxPool.Create(2),
-      TNNetConvolutionReLU.Create(64 * NeuronMultiplier,3,1,1,0), //8x8
+      TNNetConvolutionReLU.Create(64 * NeuronMultiplier,5,2,1,0), //8x8
       TNNetMovingStdNormalization.Create(),
       TNNetConvolutionReLU.Create(64 * NeuronMultiplier,3,1,1,0),
       TNNetMovingStdNormalization.Create(),
-      TNNetConvolutionReLU.Create(64 * NeuronMultiplier,3,1,1,0),
+      TNNetDeMaxPool.Create(2),
+      TNNetConvolutionReLU.Create(64 * NeuronMultiplier,5,2,1,0), //16x16
       TNNetMovingStdNormalization.Create(),
       TNNetConvolutionReLU.Create(32 * NeuronMultiplier,3,1,1,0),
       TNNetMovingStdNormalization.Create(),
-      TNNetDeMaxPool.Create(4),
+      TNNetDeMaxPool.Create(2),
       TNNetConvolutionReLU.Create(32 * NeuronMultiplier,5,2,1,0), //32x32
       TNNetMovingStdNormalization.Create(),
       TNNetConvolutionReLU.Create(32 * NeuronMultiplier,3,1,1,0),
@@ -323,19 +324,6 @@ begin
       TNNetConvolutionLinear.Create(3,3,1,1,0),
       TNNetReLUL.Create(-40, +40) // Protection against overflow
     ]);
-    (*
-    FGenerative.AddLayer([
-       TNNetInput.Create(40, 40, 3),
-       TNNetConvolutionReLU.Create(64 * NeuronMultiplier,3,0,1,0),
-       TNNetMovingStdNormalization.Create(),
-       TNNetConvolutionReLU.Create(64 * NeuronMultiplier,3,0,1,0),
-       TNNetMovingStdNormalization.Create(),
-       TNNetConvolutionReLU.Create(128 * NeuronMultiplier,3,0,1,0),
-       TNNetMovingStdNormalization.Create(),
-       TNNetConvolutionLinear.Create(3,3,0,1,0),
-       TNNetReLUL.Create(-40, +40) // Protection against overflow
-    ]);
-    *)
     FGenerative.Layers[FGenerative.GetFirstImageNeuronalLayerIdx()].InitBasicPatterns();
   end
   else
@@ -405,7 +393,7 @@ begin
   if FHasOpenCL then
   begin
     FFit.EnableOpenCL(FEasyOpenCL.PlatformIds[0], FEasyOpenCL.Devices[0]);
-    Generative.EnableOpenCL(FEasyOpenCL.PlatformIds[0], FEasyOpenCL.Devices[0]);
+    FGenerative.EnableOpenCL(FEasyOpenCL.PlatformIds[0], FEasyOpenCL.Devices[0]);
   end;
   {$endif}
   //Debug only: FFit.MaxThreadNum := 1;

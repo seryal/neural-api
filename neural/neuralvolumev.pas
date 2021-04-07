@@ -24,7 +24,8 @@ unit neuralvolumev;
 interface
 
 uses
-  Classes, SysUtils, ExtCtrls, Graphics, neuralvolume, {$IFDEF FPC}LCLType {$ELSE}Winapi.Windows{$ENDIF} ;
+  Classes, SysUtils, ExtCtrls, Graphics, neuralvolume,
+  {$IFDEF FPC}LCLType, FPImage {$ELSE}Winapi.Windows{$ENDIF} ;
 
 /// saves a bitmap into a file from a handle HWND
 procedure SaveHandleToBitmap(OutputFileName: string; hWnd: HWND);
@@ -40,6 +41,10 @@ procedure LoadPictureIntoVolume(LocalPicture: TPicture; Vol:TNNetVolume); {$IFDE
 
 /// Loads a Bitmat into a Volume
 procedure LoadBitmapIntoVolume(LocalBitmap: Graphics.TBitmap; Vol:TNNetVolume);
+
+{$IFNDEF FPC}
+procedure LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume);
+{$ENDIF}
 
 implementation
 {$IFDEF FPC}uses LCLIntf;{$ENDIF}
@@ -115,6 +120,18 @@ begin
   LoadBitmapIntoVolume(LocalPicture.Bitmap, Vol);
 end;
 
+{$IFNDEF FPC}
+procedure LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume);
+var
+  LocalPicture: TPicture;
+begin
+  LocalPicture := TPicture.Create;
+  LocalPicture.LoadFromFile( ImageFileName );
+  LoadPictureIntoVolume(LocalPicture, V);
+  LocalPicture.Free;
+end;
+{$ENDIF}
+
 procedure LoadBitmapIntoVolume(LocalBitmap: Graphics.TBitmap; Vol: TNNetVolume);
 var
   CountX, CountY, MaxX, MaxY: integer;
@@ -123,7 +140,6 @@ var
   RawPos: integer;
 begin
   LocalCanvas := LocalBitmap.Canvas;
-
   MaxX := LocalBitmap.Width - 1;
   MaxY := LocalBitmap.Height - 1;
 

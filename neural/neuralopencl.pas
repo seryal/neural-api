@@ -46,12 +46,14 @@ type
   TNeuralPChar     = PAnsiChar;
   csize_t          = NativeUInt;
   cl_bool          = TCL_bool;
+  cl_int           = TCL_int;
   cl_uint          = TCL_uint;
   cl_platform_id   = PCL_platform_id;
   cl_device_id     = PCL_device_id;
   cl_context       = PCL_context;
   cl_command_queue = PCL_command_queue;
   cl_program       = PCL_program;
+  cl_map_flags     = TCL_map_flags;
   cl_mem_flags     = TCL_mem_flags;
   cl_mem           = PCL_mem ;
   cl_kernel        = PCL_kernel;
@@ -87,7 +89,7 @@ type
     procedure CompileProgram(); overload;
 
   public
-    constructor Create();
+    constructor Create(); override;
     destructor Destroy(); override;
 
     procedure printDevicesInfo();
@@ -104,6 +106,10 @@ type
     procedure CompileProgram(programsource: string);   overload;
 
     function CreateBuffer(flags: cl_mem_flags; size: csize_t; ptr: Pointer = nil): cl_mem; overload;
+    function MapBuffer(buffer: cl_mem; cb: csize_t; map_flags: cl_map_flags; blocking: cl_bool = CL_TRUE): Pointer; overload;
+    function MapHostInputBuffer(buffer: cl_mem; cb: csize_t): Pointer; overload;
+    function UnmapMemObject(buffer: cl_mem; mapped_ptr: Pointer): cl_int;
+    function RefreshHostInputBufferCache(buffer: cl_mem; cb: csize_t): cl_int;
     function WriteBuffer(buffer: cl_mem; cb: csize_t; ptr: Pointer; blocking: cl_bool = CL_FALSE): integer; overload;
     function ReadBuffer(buffer: cl_mem; cb: csize_t; ptr: Pointer; blocking: cl_bool = CL_TRUE): integer; overload;
 
@@ -152,8 +158,7 @@ type
       function CreateOutputSetArgument(V: TNNetVolume; kernel:cl_kernel; arg_index: cl_uint): cl_mem; {$IFDEF Release} inline; {$ENDIF}
   end;
 
-  /// This is a base class - do not use it directly.
-  TDotProductKernel = class(TEasyOpenCLV)
+  TNeuralKernel = class(TEasyOpenCLV)
     private
       /// OpenCL Kernel
       FKernel: cl_kernel;
@@ -164,6 +169,24 @@ type
       destructor Destroy(); override;
 
       property Kernel: cl_kernel read FKernel;
+  end;
+
+  TDotProductKernel = class(TNeuralKernel);
+
+  // Do not use this class. It's under development
+  TNNetVolumeCL = class(TNNetVolume)
+    private
+      // OpenCL Kernel
+      FKernel: TNeuralKernel;
+      // OpenCL Buffer
+      FBufferCL: cl_mem;
+    public
+      procedure ReSize(pSizeX, pSizeY, pDepth: integer); override;
+      procedure WriteToDevice(blocking: cl_bool = CL_FALSE);
+      procedure ReadFromDevice(blocking: cl_bool = CL_TRUE);
+      destructor Destroy(); override;
+
+      property Kernel: TNeuralKernel read FKernel write FKernel;
   end;
 
   { TDotProductSharedKernel }
@@ -187,6 +210,8 @@ type
       FGroupSizeA, FGroupSizeB: longint;
       /// Average Previous Computing Time
       FPreviousComputeTime: TDateTime;
+      /// Indicates if buffers should be stored on host.
+      FHostInput: boolean;
 
       FDotProductKernel: TDotProductKernel;
 
@@ -197,7 +222,7 @@ type
 
       procedure UnprepareForCompute();
       function PrepareForCompute(VAs, VBs: TNNetVolume; pSize: longint; GroupSizeA: integer=0; GroupSizeB: integer=0): integer;
-      procedure Compute(VAs, VBs: TNNetVolume; pActFN: longint);
+      procedure Compute(VAs, VBs: TNNetVolume; pActFN: longint; NewVAs:boolean = true; NewVBs:boolean = true);
       procedure FinishAndLoadResult(Results: TNNetVolume; SaveCPU: TNeuralFloat = 0); overload;
   end;
 
@@ -214,6 +239,8 @@ type
       FThreadCount: longint;
       /// Average Previous Computing Time
       FPreviousComputeTime: TDateTime;
+      /// Indicates if buffers should be stored on host.
+      FHostInput: boolean;
 
       FInputBufferAs: cl_mem;
       FInputBufferBs: cl_mem;
@@ -222,7 +249,7 @@ type
       /// OpenCL Group Sizes;
       FGroupSizeA, FGroupSizeB: longint;
     public
-      constructor Create(pCurrentPlatform: cl_platform_id; pCurrentDevice: cl_device_id);
+      constructor Create(pCurrentPlatform: cl_platform_id; pCurrentDevice: cl_device_id; kernelname: string = 'cai_dot_product');
       destructor Destroy(); override;
 
       procedure UnprepareForCompute();
@@ -280,6 +307,41 @@ const
     (id: CL_DEVICE_MAX_CONSTANT_ARGS; Name: 'DEVICE MAX CONSTANT ARGS')
     );
 
+{ TNNetVolumeCL }
+
+procedure TNNetVolumeCL.ReSize(pSizeX, pSizeY, pDepth: integer);
+begin
+  inherited ReSize(pSizeX, pSizeY, pDepth);
+  if Assigned(FBufferCL) then
+  begin
+    clReleaseMemObject(FBufferCL);
+  end;
+
+  if Assigned(FKernel) then
+  begin
+    FBufferCL := FKernel.CreateBuffer(Self);
+  end;
+end;
+
+procedure TNNetVolumeCL.WriteToDevice(blocking: cl_bool);
+begin
+  FKernel.WriteBuffer(FBufferCL, Self, blocking);
+end;
+
+procedure TNNetVolumeCL.ReadFromDevice(blocking: cl_bool);
+begin
+  FKernel.ReadBuffer(FBufferCL, Self, blocking);
+end;
+
+destructor TNNetVolumeCL.Destroy();
+begin
+  if Assigned(FBufferCL) then
+  begin
+    clReleaseMemObject(FBufferCL);
+  end;
+  inherited Destroy();
+end;
+
 function TDotProductSharedKernel.Kernel(): cl_kernel;
 begin
   Kernel := FDotProductKernel.Kernel;
@@ -289,6 +351,7 @@ constructor TDotProductSharedKernel.Create(DotProductKernel: TDotProductKernel);
 begin
   inherited Create();
   FDotProductKernel := DotProductKernel;
+  FHostInput := False;
 end;
 
 destructor TDotProductSharedKernel.Destroy();
@@ -319,16 +382,29 @@ begin
   FGroupSizeA := GroupSizeA;
   FGroupSizeB := GroupSizeB;
 
-  FInputBufferAs := FDotProductKernel.CreateInputBuffer(VAs);
-  FInputBufferBs := FDotProductKernel.CreateInputBuffer(VBs);
+  if (FHostInput) then
+  begin
+    FInputBufferAs := FDotProductKernel.CreateHostInputBuffer(VAs);
+    FInputBufferBs := FDotProductKernel.CreateHostInputBuffer(VBs);
+  end
+  else
+  begin
+    FInputBufferAs := FDotProductKernel.CreateInputBuffer(VAs);
+    FInputBufferBs := FDotProductKernel.CreateInputBuffer(VBs);
+  end;
+
   FResultBuffer  := FDotProductKernel.CreateOutputBuffer(FNumAs * FNumBs * SizeOf(TNeuralFloat));
   FPreviousComputeTime := 0;
 
   PrepareForCompute := CL_SUCCESS;
 end;
 
-procedure TDotProductSharedKernel.Compute(VAs, VBs: TNNetVolume; pActFN: longint
-  );
+procedure TDotProductSharedKernel.Compute
+(
+  VAs, VBs: TNNetVolume;
+  pActFN: longint;
+  NewVAs:boolean = true; NewVBs:boolean = true
+);
 var
   err: integer;
 begin
@@ -362,9 +438,20 @@ begin
       err := err or clSetKernelArg(Kernel, 7, SizeOf(cl_mem),  @FResultBuffer);
       if (err <> CL_SUCCESS) then ErrorProc('7 Error: Failed to set kernel arguments:' + IntToStr(err));
 
-      err :=
-        FDotProductKernel.WriteBuffer(FInputBufferAs, VAs) or
-        FDotProductKernel.WriteBuffer(FInputBufferBs, VBs);
+      if (FHostInput) then
+      begin
+        //TODO: Fix this refresh.
+        //if NewVAs then err := err or FDotProductKernel.RefreshHostInputBufferCache(FInputBufferAs, VAs.GetMemSize());
+        //if NewVBs then err := err or FDotProductKernel.RefreshHostInputBufferCache(FInputBufferBs, VBs.GetMemSize())
+        if NewVAs then err := err or FDotProductKernel.WriteBuffer(FInputBufferAs, VAs);
+        if NewVBs then err := err or FDotProductKernel.WriteBuffer(FInputBufferBs, VBs);
+      end
+      else
+      begin
+        if NewVAs then err := err or FDotProductKernel.WriteBuffer(FInputBufferAs, VAs);
+        if NewVBs then err := err or FDotProductKernel.WriteBuffer(FInputBufferBs, VBs);
+      end;
+
       if (err <> CL_SUCCESS) then ErrorProc('Failed at WriteBuffer(input):' + IntToStr(err));
 
       err := err or clSetKernelArg(Kernel, 4, SizeOf(longint), @FActFun);
@@ -463,20 +550,20 @@ begin
   end;
 end;
 
-function TDotProductKernel.PrepareKernel(kernelname: string): integer;
+function TNeuralKernel.PrepareKernel(kernelname: string): integer;
 begin
   UnprepareKernel();
   FKernel := CreateKernel(kernelname);
   PrepareKernel := CL_SUCCESS;
 end;
 
-procedure TDotProductKernel.UnprepareKernel();
+procedure TNeuralKernel.UnprepareKernel();
 begin
   if Assigned(FKernel) then clReleaseKernel(FKernel);
   FKernel := nil;
 end;
 
-constructor TDotProductKernel.Create(pCurrentPlatform: cl_platform_id;
+constructor TNeuralKernel.Create(pCurrentPlatform: cl_platform_id;
   pCurrentDevice: cl_device_id; kernelname: string = 'cai_dot_product');
 begin
   inherited Create();
@@ -499,19 +586,20 @@ begin
   PrepareKernel(kernelname);
 end;
 
-destructor TDotProductKernel.Destroy();
+destructor TNeuralKernel.Destroy();
 begin
   UnprepareKernel();
   inherited Destroy();
 end;
 
 { TDotProductCL }
-constructor TDotProductCL.Create(pCurrentPlatform: cl_platform_id; pCurrentDevice: cl_device_id);
+constructor TDotProductCL.Create(pCurrentPlatform: cl_platform_id; pCurrentDevice: cl_device_id; kernelname: string = 'cai_dot_product');
 begin
-  inherited Create(pCurrentPlatform, pCurrentDevice);
+  inherited Create(pCurrentPlatform, pCurrentDevice, kernelname);
   FInputBufferAs := nil;
   FInputBufferBs := nil;
   FResultBuffer  := nil;
+  FHostInput     := False;
 
   FNumAs := 0;
   FNumBs := 0;
@@ -551,8 +639,16 @@ begin
   FGroupSizeA := GroupSizeA;
   FGroupSizeB := GroupSizeB;
 
-  FInputBufferAs := CreateInputBuffer(VAs);
-  FInputBufferBs := CreateInputBuffer(VBs);
+  if (FHostInput) then
+  begin
+    FInputBufferAs := CreateHostInputBuffer(VAs);
+    FInputBufferBs := CreateHostInputBuffer(VBs);
+  end
+  else
+  begin
+    FInputBufferAs := CreateInputBuffer(VAs);
+    FInputBufferBs := CreateInputBuffer(VBs);
+  end;
   FResultBuffer  := CreateOutputBuffer(FNumAs * FNumBs * SizeOf(TNeuralFloat));
   FPreviousComputeTime := 0;
 
@@ -593,9 +689,22 @@ begin
   begin
     if (VBs.Size = FSize * FNumBs) then
     begin
-      err :=
-        WriteBuffer(FInputBufferAs, VAs) or
-        WriteBuffer(FInputBufferBs, VBs);
+      if (FHostInput) then
+      begin
+        err :=
+          //TODO: Fix this refresh.
+          //RefreshHostInputBufferCache(FInputBufferAs, VAs.GetMemSize()) or
+          //RefreshHostInputBufferCache(FInputBufferBs, VBs.GetMemSize())
+          WriteBuffer(FInputBufferAs, VAs) or
+          WriteBuffer(FInputBufferBs, VBs);
+        ;
+      end
+      else
+      begin
+        err :=
+          WriteBuffer(FInputBufferAs, VAs) or
+          WriteBuffer(FInputBufferBs, VBs);
+      end;
 
       FActFun := pActFN;
 
@@ -1028,6 +1137,44 @@ begin
   begin
     FErrorProc('clCreateBuffer :'+ IntToStr(err)+ ' Size:'+ IntToStr(size)+' bytes.');
   end;
+end;
+
+function TEasyOpenCL.MapBuffer(buffer: cl_mem; cb: csize_t;
+  map_flags: cl_map_flags;
+  blocking: cl_bool): Pointer;
+var
+  err: integer; // error code returned from api calls
+begin
+  err := 0;
+  Result := clEnqueueMapBuffer(FCommands, buffer, blocking, map_flags, {offset=}0, cb,
+    {num_events=}0, {events_list=}nil, {event=}nil, {$IFDEF FPC}err{$ELSE}@err{$ENDIF});
+  if (err <> CL_SUCCESS) then
+  begin
+    FErrorProc('clEnqueueMapBuffer :'+ IntToStr(err)+ ' Size:'+ IntToStr(cb)+' bytes.');
+  end;
+end;
+
+function TEasyOpenCL.MapHostInputBuffer(buffer: cl_mem; cb: csize_t): Pointer;
+begin
+  Result := MapBuffer(buffer, cb, {map_flags=}CL_MAP_READ, {blocking=}CL_TRUE);
+end;
+
+function TEasyOpenCL.UnmapMemObject(buffer: cl_mem; mapped_ptr: Pointer): cl_int;
+begin
+  Result := clEnqueueUnmapMemObject(FCommands, buffer, mapped_ptr, {num_events=}0, {events_list=}nil, {event=}nil);
+  if (Result <> CL_SUCCESS) then
+  begin
+    FErrorProc('UnmapMemObject :'+ IntToStr(Result)+'.');
+  end;
+end;
+
+function TEasyOpenCL.RefreshHostInputBufferCache(buffer: cl_mem; cb: csize_t
+  ): cl_int;
+var
+  mapped_ptr: Pointer;
+begin
+  mapped_ptr := MapHostInputBuffer(buffer, cb);
+  Result := UnmapMemObject(buffer, mapped_ptr);
 end;
 
 function TEasyOpenCL.WriteBuffer(buffer: cl_mem; cb: csize_t; ptr: Pointer; blocking: cl_bool): integer;
