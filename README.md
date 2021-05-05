@@ -193,12 +193,14 @@ This API is really big. The following list gives a general idea about this API b
 * `TNNet.AddSeparableConvReLU` (input/output: 1D, 2D or 3D). Adds a separable convolution.
 * `TNNet.AddSeparableConvLinear` (input/output: 1D, 2D or 3D). Adds a separable convolution.
 * `TNNet.AddConvOrSeparableConv` (input/output: 1D, 2D or 3D). Adds a convolution or a separable convolutions with/without ReLU and normalization.
+* `TNNet.AddGroupedConvolution` (input/output: 1D, 2D or 3D). Adds grouped convolutions. 
 
-### Fully Connected Layers
+### Fully Connected (Dense) Layers
 * `TNNetFullConnect` (input/output: 1D, 2D or 3D).
 * `TNNetFullConnectReLU` (input/output: 1D, 2D or 3D).
 * `TNNetFullConnectLinear` (input/output: 1D, 2D or 3D).
 * `TNNetFullConnectSigmoid` (input/output: 1D, 2D or 3D).
+* `TNNet.AddGroupedFullConnect`: inspired on `TNNet.AddGroupedConvolution`, adds a grouped fully connected layer.
 
 ### Locally Connected Layers
 * `TNNetLocalConnect` (input/output: 1D, 2D or 3D - feature size: 1D or 2D).
@@ -239,7 +241,8 @@ This API is really big. The following list gives a general idea about this API b
 * `TNNetIdentity` (input/output: 1D, 2D or 3D).
 * `TNNetIdentityWithoutBackprop` (input/output: 1D, 2D or 3D). Allows the forward pass to proceed but prevents backpropagation.
 * `TNNetReshape` (input/output: 1D, 2D or 3D).
-* `TNNetSplitChannels` (input: 1D, 2D or 3D / output: 1D, 2D or 3D). Splits layers/channels from the input.
+* `TNNetSplitChannels` (input: 1D, 2D or 3D / output: 1D, 2D or 3D). Splits (or copies) channels from the input. This layer allows getting a subset of the input channels.
+* `TNNetSplitChannelEvery` (input: 1D, 2D or 3D / output: 1D, 2D or 3D). Splits (or copies) channels from the input every few channels. As example, this layer allows getting  half (GetChannelEvery=2) or a third (GetChannelEvery=3) of the input channels.
 * `TNNetSum` (input/output: 1D, 2D or 3D). Sums outputs from previous layers allowing ResNet style networks.
 
 ### Layers with Activation Functions and no Trainable Parameter
@@ -384,6 +387,29 @@ Source code examples:
 * [Simple Plant Leaf Disease Image Classifier for the PlantVillage Dataset](https://github.com/joaopauloschuler/neural-api/tree/master/examples/SimplePlantLeafDisease)
 * [Tiny ImageNet 200](https://github.com/joaopauloschuler/neural-api/blob/master/examples/SimpleTinyImageNet)
 
+#### Is your Dataset too Big for RAM? You should use TNeuralImageLoadingFit.
+In the case that your image classification dataset is too big to be stored in RAM, you can follow this example:
+```
+    FTrainingFileNames, FValidationFileNames, FTestFileNames: TFileNameList;
+...
+    ProportionToLoad := 1;
+    CreateFileNameListsFromImagesFromFolder(
+      FTrainingFileNames, FValidationFileNames, FTestFileNames,
+      {FolderName=}'places_folder/train', {pImageSubFolder=}'',
+      {TrainingProp=}0.9*ProportionToLoad,
+      {ValidationProp=}0.05*ProportionToLoad,
+      {TestProp=}0.05*ProportionToLoad
+    );
+```
+Then, you can call a fitting method made specific for this:
+```
+NeuralFit := TNeuralImageLoadingFit.Create;
+...
+NeuralFit.FitLoading({NeuralNetworkModel}NN, {ImageSizeX}256, {ImageSizeY}256, FTrainingFileNames, FValidationFileNames, FTestFileNames, {BatchSize}256, {Epochs}100);
+```
+`TNeuralImageLoadingFit.FitLoading` has been tested with [Places365-Standard Small images 256x256 with easy directory structure](http://places2.csail.mit.edu/download.html).
+You can follow this example:
+* [Simple Plant Leaf Disease Image Classifier with Few RAM](https://github.com/joaopauloschuler/neural-api/blob/master/examples/SimplePlantLeafDisease/SimplePlantLeafDiseaseLoadingAPI.pas)
 ### Loading and Saving Images with Volumes
 When loading an image from a file, the easiest and fastest method is calling `LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume)`. When loading from an **TFPMemoryImage**, you can load with `LoadImageIntoVolume(M: TFPMemoryImage; Vol:TNNetVolume)`. For saving an image, the fastest method is `SaveImageFromVolumeIntoFile(V: TNNetVolume; ImageFileName: string)`.
 

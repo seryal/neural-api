@@ -27,6 +27,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 // Enable this flag if you intend to use OpenCL
 //{$Define OpenCL}
 
+{$DEFINE HASTHREADS}
+
 {$IFDEF FPC}
   {$COPERATORS ON}
   {$mode objfpc}
@@ -51,7 +53,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
     {$UNDEF AVX2}
     {$UNDEF AVX512}
     {$UNDEF AVXANY}
-    {$UNDEF Release} //Release seems to brake on ARM
   {$ENDIF}
 {$ELSE}
   // AVX code is supported only under FPC

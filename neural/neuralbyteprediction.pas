@@ -47,7 +47,7 @@ unit neuralbyteprediction; // this unit used to be called UBup3
 
 interface
 
-uses neuralabfun, neuralcache;
+uses neuralabfun, neuralcache, neuralvolume;
 
 type
   TCountings = array of longint;
@@ -315,11 +315,15 @@ type
     // number of combinatorial NEURONS. If you don't know how many to crete, give 200.
       pNumberOfSearches: integer;
     // the higher the number, more computations are used on each step. If you don't know what number to use, give 40.
-      pUseCache: boolean
+      pUseCache: boolean;
     // replies the same prediction for the same given state. Use false if you aren't sure.
-      );
+      CacheSize: integer = 1000
+    );
 
-    // THIS METHOD WILL PREDICT THE NEXT SATE GIVEN AN ARRAY OF ACTIONS AND STATES.
+    /// Frees memory
+    procedure DeInitiate();
+
+    /// THIS METHOD WILL PREDICT THE NEXT SATE GIVEN AN ARRAY OF ACTIONS AND STATES.
     // You can understand ACTIONS as a kind of "current state".
     // Returned value "predicted states" contains the neural network prediction.
     procedure Predict(var pActions, pCurrentState: array of byte;
@@ -344,9 +348,11 @@ type
     function GetD(posPredictedState: longint): single;
   end;
 
+
 implementation
 
 uses neuralab, SysUtils, Classes;
+
 
 { TClassifier }
 
@@ -684,7 +690,7 @@ end;
 
 procedure TEasyLearnAndPredictClass.Initiate(pActionByteLen, pStateByteLen: word;
   pIncludeZeros: boolean; NumNeuronGroups: integer; pNumberOfSearches: integer;
-  pUseCache: boolean);
+  pUseCache: boolean; CacheSize: integer);
 begin
   BytePred.Init(pIncludeZeros, NumNeuronGroups, pNumberOfSearches);
   BytePred.DefineLens(pActionByteLen, pStateByteLen);
@@ -694,9 +700,14 @@ begin
   SetLength(FRelationProbability, pStateByteLen);
   SetLength(FVictoryIndex, pStateByteLen);
   if (pUseCache)
-  then FCache.Init(pActionByteLen, pStateByteLen)
-  else FCache.Init(1, 1);
+  then FCache.Init(pActionByteLen, pStateByteLen, CacheSize)
+  else FCache.Init(1, 1, 1);
   FUseCache := pUseCache;
+end;
+
+procedure TEasyLearnAndPredictClass.DeInitiate();
+begin
+  FCache.DeInit;
 end;
 
 procedure TEasyLearnAndPredictClass.Predict(var pActions, pCurrentState: array of byte;
@@ -759,7 +770,7 @@ begin
   else
     PNormalProcedure;
   newStateFound := predictionError;
-  if FUseCache then
+  if FUseCache and (predictionError=0) then
     FCache.Include(aActions, stateFound);
 end;
 

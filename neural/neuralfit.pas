@@ -19,7 +19,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 unit neuralfit;
 
 {$include neuralnetwork.inc}
-{$DEFINE HASTHREADS}
 
 {$IFDEF FPC}
 {$H+}
@@ -28,7 +27,7 @@ unit neuralfit;
 interface
 
 uses
-  Classes, SysUtils, neuralnetwork, neuralvolume, neuralthread
+  Classes, SysUtils, neuralnetwork, neuralvolume, neuralthread, neuraldatasets
   {$IFDEF OpenCL}, cl
   {$IFNDEF FPC}, neuralopencl {$ENDIF}
   {$ENDIF}
@@ -91,7 +90,7 @@ type
       FProcs: TNeuralThreadList;
       procedure CheckLearningRate(iEpochCount: integer);
     public
-      constructor Create();
+      constructor Create(); override;
       destructor Destroy(); override;
       procedure WaitUntilFinished;
       {$IFDEF OpenCL}
@@ -132,6 +131,29 @@ type
       property ShouldQuit: boolean read FShouldQuit write FShouldQuit;
   end;
 
+  TNeuralFitWithImageBase = class(TNeuralFitBase)
+    protected
+      FMaxCropSize: integer;
+      FHasImgCrop: boolean;
+      FHasMakeGray: boolean;
+      FHasFlipX: boolean;
+      FHasFlipY: boolean;
+      FHasResizing: boolean;
+      FColorEncoding: integer;
+    public
+      constructor Create(); override;
+      destructor Destroy(); override;
+      procedure ClassifyImage(pNN: TNNet; pImgInput, pOutput: TNNetVolume);
+      procedure EnableDefaultImageTreatment(); virtual;
+
+      property HasImgCrop: boolean read FHasImgCrop write FHasImgCrop;
+      property HasMakeGray: boolean read FHasMakeGray write FHasMakeGray;
+      property HasFlipX: boolean read FHasFlipX write FHasFlipX;
+      property HasFlipY: boolean read FHasFlipY write FHasFlipY;
+      property HasResizing: boolean read FHasResizing write FHasResizing;
+      property MaxCropSize: integer read FMaxCropSize write FMaxCropSize;
+  end;
+
   TNNetDataAugmentationFn = procedure(pInput: TNNetVolume; ThreadId: integer) of object;
   TNNetLossFn = function(ExpectedOutput, FoundOutput: TNNetVolume; ThreadId: integer): TNeuralFloat of object;
   TNNetInferHitFn = function(A, B: TNNetVolume; ThreadId: integer): boolean;
@@ -139,7 +161,7 @@ type
   TNNetGet2VolumesProc = procedure(Idx: integer; ThreadId: integer; pInput, pOutput: TNNetVolume) of object;
 
   /// Fitting algorithm with data (pairs) loading
-  TNeuralDataLoadingFit = class(TNeuralFitBase)
+  TNeuralDataLoadingFit = class(TNeuralFitWithImageBase)
     protected
       FDataAugmentationFn: TNNetDataAugmentationFn;
       FInferHitFn: TNNetInferHitFn;
@@ -150,8 +172,9 @@ type
       FLocalTestProc: TNNetGet2VolumesProc;
       FGetTrainingPair, FGetValidationPair, FGetTestPair: TNNetGetPairFn;
       FGetTrainingProc, FGetValidationProc, FGetTestProc: TNNetGet2VolumesProc;
+      function DefaultLossFn(ExpectedOutput, FoundOutput: TNNetVolume; ThreadId: integer): TNeuralFloat;
     public
-      constructor Create();
+      constructor Create(); override;
       procedure FitLoading(pNN: TNNet;
         TrainingCnt, ValidationCnt, TestCnt, pBatchSize, Epochs: integer;
         pGetTrainingPair, pGetValidationPair, pGetTestPair: TNNetGetPairFn); overload;
@@ -163,6 +186,7 @@ type
       procedure EnableBipolarHitComparison();
       procedure EnableBipolar99HitComparison();
       procedure EnableClassComparison();
+      procedure EnableDefaultImageTreatment(); override;
 
       // On most cases, you should never call the following methods directly
       procedure RunNNThread(index, threadnum: integer);
@@ -194,7 +218,7 @@ type
       function FitValidationPair(Idx: integer; ThreadId: integer): TNNetVolumePair;
       function FitTestPair(Idx: integer; ThreadId: integer): TNNetVolumePair;
     public
-      constructor Create();
+      constructor Create(); override;
       destructor Destroy(); override;
 
       procedure Fit(pNN: TNNet;
@@ -202,21 +226,48 @@ type
         pBatchSize, Epochs: integer);
   end;
 
-  /// Image Classification Fitting Algorithm
-  TNeuralImageFit = class(TNeuralFitBase)
+  {$IFDEF FPC}
+  { TNeuralImageLoadingFit }
+  TNeuralImageLoadingFit = class(TNeuralDataLoadingFit)
     protected
+      FSizeX, FSizeY: integer;
+      FTrainingFileNames, FValidationFileNames, FTestFileNames: TFileNameList;
+      FTrainingVolumeCache: TNNetVolumeList;
+      FTrainingVolumeCacheEnabled: boolean;
+      FTrainingVolumeCacheSize: integer;
+      FTrainingVolumeCachePct: integer;
+      FTrainingSampleProcessedCnt: TNNetVolume;
+
+      procedure GetTrainingProc(Idx: integer; ThreadId: integer; pInput, pOutput: TNNetVolume);
+      procedure GetValidationProc(Idx: integer; ThreadId: integer; pInput, pOutput: TNNetVolume);
+      procedure GetTestProc(Idx: integer; ThreadId: integer; pInput, pOutput: TNNetVolume);
+    public
+      constructor Create(); override;
+      destructor Destroy(); override;
+
+      procedure FitLoading(pNN: TNNet;
+        pSizeX, pSizeY: integer;
+        pTrainingFileNames, pValidationFileNames, pTestFileNames: TFileNameList;
+        pBatchSize, Epochs: integer); overload;
+
+      property SizeX:integer read FSizeX;
+      property SizeY:integer read FSizeX;
+      property TrainingVolumeCacheEnabled: boolean read FTrainingVolumeCacheEnabled write FTrainingVolumeCacheEnabled;
+      property TrainingVolumeCacheSize: integer read FTrainingVolumeCacheSize write FTrainingVolumeCacheSize;
+      property TrainingVolumeCachePct: integer read FTrainingVolumeCachePct write FTrainingVolumeCachePct;
+  end;
+  {$ENDIF}
+
+  /// Image Classification Fitting Algorithm
+  TNeuralImageFit = class(TNeuralFitWithImageBase)
+    protected
+      FWorkingVolumes: TNNetVolumeList;
       FNumClasses: integer;
       FImgVolumes, FImgValidationVolumes, FImgTestVolumes: TNNetVolumeList;
-      FMaxCropSize: integer;
-      FHasImgCrop: boolean;
-      FHasMakeGray: boolean;
-      FHasFlipX: boolean;
-      FHasFlipY: boolean;
       FIsSoftmax: boolean;
-      FColorEncoding: integer;
-      FWorkingVolumes: TNNetVolumeList;
+      FTrainingSampleProcessedCnt: TNNetVolume;
     public
-      constructor Create();
+      constructor Create(); override;
       destructor Destroy(); override;
 
       procedure Fit(pNN: TNNet;
@@ -224,15 +275,7 @@ type
         pNumClasses, pBatchSize, Epochs: integer);
       procedure RunNNThread(index, threadnum: integer);
       procedure TestNNThread(index, threadnum: integer);
-      procedure ClassifyImage(pNN: TNNet; pImgInput, pOutput: TNNetVolume);
-
-      property HasImgCrop: boolean read FHasImgCrop write FHasImgCrop;
-      property HasMakeGray: boolean read FHasMakeGray write FHasMakeGray;
-      property HasFlipX: boolean read FHasFlipX write FHasFlipX;
-      property HasFlipY: boolean read FHasFlipY write FHasFlipY;
-      property MaxCropSize: integer read FMaxCropSize write FMaxCropSize;
   end;
-
 
   function MonopolarCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
   function BipolarCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
@@ -304,7 +347,165 @@ function ClassCompare(A, B: TNNetVolume; ThreadId: integer): boolean;
 begin
   Result := (A.GetClass() = B.GetClass());
 end;
+
+{$IFDEF FPC}
+{ TNeuralImageLoadingFit }
+procedure TNeuralImageLoadingFit.GetTrainingProc(Idx: integer;
+  ThreadId: integer; pInput, pOutput: TNNetVolume);
+var
+  AuxVolume: TNNetVolume;
+  CacheId: integer;
+  LocalCacheVolume: TNNetVolume;
+  ImageId: integer;
+  MaxLen: integer;
+begin
+  if FTrainingVolumeCacheEnabled then
+  begin
+    CacheId := Random(FTrainingVolumeCacheSize);
+    LocalCacheVolume := FTrainingVolumeCache[CacheId];
+    if ((LocalCacheVolume.Tag = -1) or (Random(1000)>FTrainingVolumeCachePct*10)) then
+    begin
+      AuxVolume := TNNetVolume.Create();
+      ImageId := TNeuralThreadList.GetRandomNumberOnWorkingRange(ThreadId, FThreadNum, FTrainingFileNames.Count, MaxLen);
+      ImageId := FTrainingSampleProcessedCnt.GetSmallestIdxInRange(ImageId, Min(MaxLen,100));
+      FTrainingFileNames.GetImageVolumePairFromId(ImageId, AuxVolume, pOutput, false);
+      pInput.CopyResizing(AuxVolume, FSizeX, FSizeY);
+      LocalCacheVolume.Copy(pInput);
+      LocalCacheVolume.Tag := AuxVolume.Tag;
+      pInput.Tag := AuxVolume.Tag;
+      AuxVolume.Free;
+    end
+    else
+    begin
+      pInput.Copy(LocalCacheVolume);
+      pOutput.ReSize(FTrainingFileNames.ClassCount);
+      pOutput.SetClassForSoftMax(LocalCacheVolume.Tag);
+      pInput.Tag := LocalCacheVolume.Tag;
+      pOutput.Tag := LocalCacheVolume.Tag;
+    end;
+  end
+  else
+  begin
+    AuxVolume := TNNetVolume.Create();
+    ImageId := TNeuralThreadList.GetRandomNumberOnWorkingRange(ThreadId, FThreadNum, FTrainingFileNames.Count, MaxLen);
+    ImageId := FTrainingSampleProcessedCnt.GetSmallestIdxInRange(ImageId, Min(MaxLen,100));
+    FTrainingFileNames.GetImageVolumePairFromId(ImageId, AuxVolume, pOutput, false);
+    pInput.CopyResizing(AuxVolume, FSizeX, FSizeY);
+    pInput.Tag := AuxVolume.Tag;
+    AuxVolume.Free;
+  end;
+end;
+
+procedure TNeuralImageLoadingFit.GetValidationProc(Idx: integer;
+  ThreadId: integer; pInput, pOutput: TNNetVolume);
+var
+  AuxVolume: TNNetVolume;
+begin
+  AuxVolume := TNNetVolume.Create();
+  FValidationFileNames.GetImageVolumePairFromId(Idx, AuxVolume, pOutput, false);
+  pInput.CopyResizing(AuxVolume, FSizeX, FSizeY);
+  pInput.Tag := AuxVolume.Tag;
+  AuxVolume.Free;
+end;
+
+procedure TNeuralImageLoadingFit.GetTestProc(Idx: integer; ThreadId: integer;
+  pInput, pOutput: TNNetVolume);
+var
+  AuxVolume: TNNetVolume;
+begin
+  AuxVolume := TNNetVolume.Create();
+  FTestFileNames.GetImageVolumePairFromId(Idx, AuxVolume, pOutput, false);
+  pInput.CopyResizing(AuxVolume, FSizeX, FSizeY);
+  pInput.Tag := AuxVolume.Tag;
+  AuxVolume.Free;
+end;
+
+constructor TNeuralImageLoadingFit.Create();
+begin
+  inherited Create();
+  FTrainingVolumeCacheSize := 1000;
+  FTrainingVolumeCachePct := 50;
+  FTrainingVolumeCacheEnabled := false;
+  EnableDefaultImageTreatment();
+  FTrainingSampleProcessedCnt := TNNetVolume.Create();
+end;
+
+destructor TNeuralImageLoadingFit.Destroy();
+begin
+  FTrainingSampleProcessedCnt.Free;
+  inherited Destroy();
+end;
+
+procedure TNeuralImageLoadingFit.FitLoading(pNN: TNNet; pSizeX,
+  pSizeY: integer; pTrainingFileNames, pValidationFileNames,
+  pTestFileNames: TFileNameList; pBatchSize, Epochs: integer);
+begin
+  FSizeX := pSizeX;
+  FSizeY := pSizeY;
+  FTrainingFileNames   := pTrainingFileNames;
+  FValidationFileNames := pValidationFileNames;
+  FTestFileNames       := pTestFileNames;
+  FTrainingVolumeCache := TNNetVolumeList.Create;
+  FTrainingSampleProcessedCnt.Resize(FTrainingFileNames.Count);
+  if Not(FTrainingVolumeCacheEnabled) then FTrainingVolumeCacheSize := 1;
+  FTrainingVolumeCache.AddVolumes(FTrainingVolumeCacheSize, FSizeX, FSizeY, 3);
+  FTrainingVolumeCache.FillTag({TagId}0, {TagValue}-1);
+  FitLoading(pNN,
+    FTrainingFileNames.Count, FValidationFileNames.Count, FTestFileNames.Count,
+    pBatchSize, Epochs, @Self.GetTrainingProc, @Self.GetValidationProc, @Self.GetTestProc
+  );
+  FTrainingVolumeCache.Free;
+end;
+{$ENDIF}
+
+constructor TNeuralFitWithImageBase.Create();
+begin
+  inherited Create();
+  FMaxCropSize := 0;
+  FHasImgCrop := false;
+  FHasFlipX := false;
+  FHasFlipY := false;
+  FHasMakeGray := false;
+  FColorEncoding := 0;
+  FMultipleSamplesAtValidation := false;
+end;
+
+destructor TNeuralFitWithImageBase.Destroy();
+begin
+  inherited Destroy();
+end;
+
 { TNeuralDataLoadingFit }
+
+function TNeuralDataLoadingFit.DefaultLossFn(ExpectedOutput,
+  FoundOutput: TNNetVolume; ThreadId: integer): TNeuralFloat;
+var
+  ClassId: integer;
+  OutputValue: TNeuralFloat;
+begin
+  ClassId := ExpectedOutput.Tag;
+  OutputValue := FoundOutput.FData[ ClassId ];
+
+  {$IFDEF Debug}
+  if ClassId <> ExpectedOutput.GetClass() then
+  begin
+    FErrorProc(
+      'Error - classes do not match at TNeuralDataLoadingFit.DefaultLossFn:' +
+      IntToStr(ClassId)+','+IntToStr(ExpectedOutput.GetClass())
+    );
+  end;
+  {$ENDIF}
+
+  if (OutputValue > 0) then
+  begin
+    result := -Ln(OutputValue);
+  end
+  else
+  begin
+    FErrorProc('Error - invalid output value at loss function:' + FloatToStrF(OutputValue,ffFixed,6,4));
+    result := 1;
+  end;
+end;
 
 constructor TNeuralDataLoadingFit.Create();
 begin
@@ -357,15 +558,17 @@ begin
 
   if FVerbose then
   begin
-    WriteLn('Learning rate:',FCurrentLearningRate:8:6,
-      ' L2 decay:', FL2Decay:8:6,
-      ' Inertia:', FInertia:8:6,
-      ' Batch size:', FBatchSize,
-      ' Step size:', FStepSize,
-      ' Staircase ephocs:',FStaircaseEpochs);
-    if TrainingCnt > 0 then WriteLn('Training volumes:', TrainingCnt);
-    if ValidationCnt > 0 then WriteLn('Validation volumes: ', ValidationCnt);
-    if TestCnt > 0 then WriteLn('Test volumes: ', TestCnt);
+    MessageProc(
+      'Learning rate:' + FloatToStrF(FCurrentLearningRate,ffFixed,8,6) +
+      ' L2 decay:' + FloatToStrF(FL2Decay,ffFixed,8,6) +
+      ' Inertia:' + FloatToStrF(FInertia,ffFixed,8,6) +
+      ' Batch size:' + IntToStr(FBatchSize) +
+      ' Step size:' + IntToStr(FStepSize) +
+      ' Staircase ephocs:' + IntToStr(FStaircaseEpochs)
+    );
+    if TrainingCnt > 0 then MessageProc('Training volumes: '+IntToStr(TrainingCnt));
+    if ValidationCnt > 0 then MessageProc('Validation volumes: '+IntToStr(ValidationCnt));
+    if TestCnt > 0 then MessageProc('Test volumes: '+IntToStr(TestCnt));
   end;
 
   if FVerbose then
@@ -393,11 +596,11 @@ begin
         if (FCurrentEpoch = FInitialEpoch) and (I = 1) then
         begin
           AccuracyWithInertia := CurrentAccuracy;
-        end else if (FStepSize < 100) then
+        end else if (FStepSize < 1280) then
         begin
           AccuracyWithInertia := AccuracyWithInertia*0.99 + CurrentAccuracy*0.01;
         end
-        else if (FStepSize < 500) then
+        else if (FStepSize < 5120) then
         begin
           AccuracyWithInertia := AccuracyWithInertia*0.9 + CurrentAccuracy*0.1;
         end
@@ -411,16 +614,16 @@ begin
       if ( (FGlobalTotal > 0) and (I mod 10 = 0) ) then
       begin
         totalTimeSeconds := (Now() - startTime) * 24 * 60 * 60;
-        if FVerbose then WriteLn
+        if FVerbose then MessageProc
         (
-          (FGlobalHit + FGlobalMiss)*I + FCurrentEpoch*TrainingCnt,
-          ' Examples seen. Accuracy:', (FTrainingAccuracy):6:4,
-          ' Error:', TrainingError:10:5,
-          ' Loss:', TrainingLoss:7:5,
-          ' Threads: ', FThreadNum,
-          ' Forward time:', (FNN.ForwardTime * 24 * 60 * 60):6:2,'s',
-          ' Backward time:', (FNN.BackwardTime * 24 * 60 * 60):6:2,'s',
-          ' Step time:', totalTimeSeconds:6:2,'s'
+          IntToStr((FGlobalHit + FGlobalMiss)*I + FCurrentEpoch*TrainingCnt) +
+          ' Examples seen. Accuracy: ' + FloatToStrF(FTrainingAccuracy,ffFixed,6,4) +
+          ' Error: ' + FloatToStrF(TrainingError,ffFixed,10,5) +
+          ' Loss: ' + FloatToStrF(TrainingLoss,ffFixed,7,5) +
+          ' Threads: ' + IntToStr(FThreadNum) +
+          ' Forward time: ' + FloatToStrF(FNN.ForwardTime * 24 * 60 * 60,ffFixed,6,2)+'s' +
+          ' Backward time: ' + FloatToStrF(FNN.BackwardTime * 24 * 60 * 60,ffFixed,6,2)+'s'+
+          ' Step time: ' + FloatToStrF(totalTimeSeconds,ffFixed,6,2) + 's'
         );
 
         startTime := Now();
@@ -471,13 +674,14 @@ begin
 
         if (FGlobalTotal > 0) and (FVerbose) then
         begin
-          WriteLn(
-            'Epochs: ',FCurrentEpoch,
-            ' Examples seen:', FCurrentEpoch * TrainingCnt,
-            ' Validation Accuracy: ', ValidationRate:6:4,
-            ' Validation Error: ', ValidationError:6:4,
-            ' Validation Loss: ', ValidationLoss:6:4,
-            ' Total time: ', (((Now() - globalStartTime)) * 24 * 60): 6: 2, 'min'
+          FMessageProc(
+            'Epochs: ' + IntToStr(FCurrentEpoch) +
+            ' Examples seen:' + IntToStr(FCurrentEpoch * TrainingCnt) +
+            ' Validation Accuracy: ' + FloatToStrF(ValidationRate,ffFixed,6,4) +
+            ' Validation Error: ' + FloatToStrF(ValidationError,ffFixed,6,4) +
+            ' Validation Loss: ' + FloatToStrF(ValidationLoss,ffFixed,6,4) +
+            ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
+            'min'
           );
         end;
 
@@ -508,13 +712,14 @@ begin
           end;
           if (FGlobalTotal > 0) and (FVerbose) then
           begin
-            WriteLn(
-              'Epochs: ', FCurrentEpoch,
-              ' Examples seen:', FCurrentEpoch * TrainingCnt,
-              ' Test Accuracy: ', TestRate:6:4,
-              ' Test Error: ', TestError:6:4,
-              ' Test Loss: ', TestLoss:6:4,
-              ' Total time: ', (((Now() - globalStartTime)) * 24 * 60): 6: 2, 'min'
+            FMessageProc(
+              'Epochs: ' + IntToStr(FCurrentEpoch) +
+              ' Examples seen:' + IntToStr(FCurrentEpoch * TrainingCnt) +
+              ' Test Accuracy: ' + FloatToStrF(TestRate,ffFixed,6,4) +
+              ' Test Error: ' + FloatToStrF(TestError,ffFixed,6,4) +
+              ' Test Loss: ' + FloatToStrF(TestLoss,ffFixed,6,4) +
+              ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
+              'min'
             );
           end;
         end;
@@ -567,12 +772,12 @@ begin
       Append(CSVFile);
 
       MessageProc(
-        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*10))/60,ffGeneral,1,4)+' minutes.' +
-        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*10))/3600,ffGeneral,1,4)+' hours.');
+        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*10))/60,ffFixed,1,4)+' minutes.' +
+        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*10))/3600,ffFixed,1,4)+' hours.');
 
       MessageProc(
         'Epochs: '+IntToStr(FCurrentEpoch)+
-        '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffGeneral,4,2)+' hours.');
+        '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffFixed,4,2)+' hours.');
     end;
     if Assigned(FOnAfterEpoch) then FOnAfterEpoch(Self);
   end;
@@ -676,6 +881,7 @@ var
   BlockSize, BlockSizeRest: integer;
   LocalNN: TNNet;
   vInput: TNNetVolume;
+  vInputCopy: TNNetVolume;
   pOutput, vOutput: TNNetVolume;
   I: integer;
   CurrentLoss: TNeuralFloat;
@@ -685,10 +891,12 @@ var
   {$IFDEF DEBUG}
   InitialWeightSum, FinalWeightSum: TNeuralFloat;
   {$ENDIF}
+  CropSizeX, CropSizeY: integer;
 begin
-  vInput  := TNNetVolume.Create();
-  pOutput := TNNetVolume.Create();
-  vOutput := TNNetVolume.Create();
+  vInput     := TNNetVolume.Create();
+  pOutput    := TNNetVolume.Create();
+  vOutput    := TNNetVolume.Create();
+  vInputCopy := TNNetVolume.Create();
 
   LocalHit := 0;
   LocalMiss := 0;
@@ -717,14 +925,52 @@ begin
       LocalTrainingPair := FGetTrainingPair(I, Index);
       vInput.Copy( LocalTrainingPair.I );
       vOutput.Copy( LocalTrainingPair.O );
+      vInput.Tag := LocalTrainingPair.I.Tag;
+      vOutput.Tag := LocalTrainingPair.O.Tag;
     end
     else
     begin
       FGetTrainingProc(I, Index, vInput, vOutput)
     end;
 
-    if Assigned(FDataAugmentationFn)
-      then FDataAugmentationFn(vInput, Index);
+    if Assigned(FDataAugmentationFn) then
+    begin
+      FDataAugmentationFn(vInput, Index);
+    end
+    else if FDataAugmentation then
+    begin
+      if FHasImgCrop then
+      begin
+        vInputCopy.CopyCropping(vInput, random(FMaxCropSize), random(FMaxCropSize), vInput.SizeX-FMaxCropSize, vInput.SizeY-FMaxCropSize);
+        vInput.Copy(vInputCopy);
+      end;
+
+      if FHasResizing then
+      begin
+        CropSizeX := random(FMaxCropSize + 1);
+        CropSizeY := random(FMaxCropSize + 1);
+        vInputCopy.CopyCropping(vInput, random(CropSizeX), random(CropSizeY), vInput.SizeX-CropSizeX, vInput.SizeY-CropSizeY);
+        vInput.CopyResizing(vInputCopy, vInput.SizeX, vInput.SizeY);
+      end;
+
+      if (vInput.Depth = 3) then
+      begin
+        if FHasMakeGray and (Random(1000) > 750) then
+        begin
+          vInput.MakeGray(FColorEncoding);
+        end;
+      end;
+
+      if FHasFlipX and (Random(1000) > 500) then
+      begin
+        vInput.FlipX();
+      end;
+
+      if FHasFlipY and (Random(1000) > 500) then
+      begin
+        vInput.FlipY();
+      end;
+    end;
 
     LocalNN.Compute( vInput );
     LocalNN.GetOutput( pOutput );
@@ -790,12 +1036,12 @@ begin
   end;
   {$ENDIF}
   {$IFDEF HASTHREADS}EnterCriticalSection(FCritSec);{$ENDIF}
-  FGlobalHit       := FGlobalHit + LocalHit;
+  FGlobalHit       := FGlobalHit  + LocalHit;
   FGlobalMiss      := FGlobalMiss + LocalMiss;
   FGlobalTotalLoss := FGlobalTotalLoss + LocalTotalLoss;
-  FGlobalErrorSum  := FGlobalErrorSum + LocalErrorSum;
+  FGlobalErrorSum  := FGlobalErrorSum  + LocalErrorSum;
 
-  FNN.ForwardTime := FNN.ForwardTime + LocalNN.ForwardTime;
+  FNN.ForwardTime  := FNN.ForwardTime  + LocalNN.ForwardTime;
   FNN.BackwardTime := FNN.BackwardTime + LocalNN.BackwardTime;
   {$IFDEF Debug}
   if Index and 3 = 0 then FNN.SumDeltas(LocalNN);
@@ -803,6 +1049,7 @@ begin
   if Index and 3 = 0 then FNN.SumDeltasNoChecks(LocalNN);
   {$ENDIF}
   {$IFDEF HASTHREADS}LeaveCriticalSection(FCritSec);{$ENDIF}
+  vInputCopy.Free;
   vInput.Free;
   vOutput.Free;
   pOutput.Free;
@@ -814,15 +1061,20 @@ var
   LocalNN: TNNet;
   vInput: TNNetVolume;
   pOutput, vOutput, LocalFrequency: TNNetVolume;
+  vInputCopy: TNNetVolume;
+  sumOutput: TNNetVolume;
   I: integer;
   StartPos, FinishPos: integer;
   LocalHit, LocalMiss: integer;
   LocalTotalLoss, LocalErrorSum: TNeuralFloat;
   LocalTestPair: TNNetVolumePair;
+  TotalDiv: TNeuralFloat;
 begin
-  vInput  := TNNetVolume.Create();
-  pOutput := TNNetVolume.Create();
-  vOutput := TNNetVolume.Create();
+  vInput     := TNNetVolume.Create();
+  pOutput    := TNNetVolume.Create();
+  vOutput    := TNNetVolume.Create();
+  sumOutput  := TNNetVolume.Create();
+  vInputCopy := TNNetVolume.Create();
   LocalFrequency := TNNetVolume.Create();
 
   LocalHit := 0;
@@ -855,6 +1107,35 @@ begin
     LocalNN.Compute( vInput );
     LocalNN.GetOutput( pOutput );
 
+    if FMultipleSamplesAtValidation then
+    begin
+      TotalDiv := 1;
+      sumOutput.ReSize( pOutput );
+      sumOutput.Copy( pOutput );
+
+      if FHasFlipX then
+      begin
+        vInput.FlipX();
+        TotalDiv := TotalDiv + 1;
+        LocalNN.Compute( vInput );
+        LocalNN.GetOutput( pOutput );
+        sumOutput.Add( pOutput );
+      end;
+
+      if ((FMaxCropSize >= 2) and Not(FHasImgCrop)) then
+      begin
+        vInputCopy.CopyCropping(vInput, FMaxCropSize div 2, FMaxCropSize div 2, vInput.SizeX - FMaxCropSize, vInput.SizeY - FMaxCropSize);
+        vInput.CopyResizing(vInputCopy, vInput.SizeX, vInput.SizeY);
+        LocalNN.Compute( vInput );
+        LocalNN.GetOutput( pOutput );
+        sumOutput.Add( pOutput );
+        TotalDiv := TotalDiv + 1;
+      end;
+      sumOutput.Divi(TotalDiv);
+
+      pOutput.Copy(sumOutput);
+    end;
+
     LocalErrorSum := LocalErrorSum + vOutput.SumDiff( pOutput );
 
     if Assigned(FInferHitFn) then
@@ -882,6 +1163,8 @@ begin
   {$IFDEF HASTHREADS}LeaveCriticalSection(FCritSec);{$ENDIF}
 
   LocalFrequency.Free;
+  vInputCopy.Free;
+  sumOutput.Free;
   vInput.Free;
   vOutput.Free;
   pOutput.Free;
@@ -1046,22 +1329,29 @@ end;
 
 procedure TNeuralDataLoadingFit.EnableMonopolarHitComparison();
 begin
-  FInferHitFn := @MonopolarCompare;
+  FInferHitFn := {$IFDEF FPC}@{$ENDIF}MonopolarCompare;
 end;
 
 procedure TNeuralDataLoadingFit.EnableBipolarHitComparison();
 begin
-  FInferHitFn := @BipolarCompare;
+  FInferHitFn := {$IFDEF FPC}@{$ENDIF}BipolarCompare;
 end;
 
 procedure TNeuralDataLoadingFit.EnableBipolar99HitComparison();
 begin
-  FInferHitFn := @BipolarCompare99;
+  FInferHitFn := {$IFDEF FPC}@{$ENDIF}BipolarCompare99;
 end;
 
 procedure TNeuralDataLoadingFit.EnableClassComparison();
 begin
-  FInferHitFn := @ClassCompare;
+  FInferHitFn := {$IFDEF FPC}@{$ENDIF}ClassCompare;
+end;
+
+procedure TNeuralDataLoadingFit.EnableDefaultImageTreatment();
+begin
+  inherited EnableDefaultImageTreatment();
+  EnableClassComparison();
+  FLossFn := {$IFDEF FPC}@{$ENDIF}DefaultLossFn;
 end;
 
 { TNeuralFitBase }
@@ -1164,9 +1454,9 @@ begin
     // expressed with 0.01 and not 0.99
     FLearningRateDecay := 1 - FLearningRateDecay;
     if FVerbose then
-    WriteLn
+    MessageProc
     (
-      'Learning rate decay set to:',FLearningRateDecay:7:5
+      'Learning rate decay set to:'+FloatToStrF(FLearningRateDecay,ffFixed,7,5)
     );
   end;
   if Assigned(FCustomLearningRateScheduleFn) then
@@ -1193,9 +1483,9 @@ begin
     FNN.SetLearningRate(FCurrentLearningRate, FInertia);
     FNN.ClearInertia();
     if FVerbose then
-    WriteLn
+    MessageProc
     (
-      'Learning rate set to:',FCurrentLearningRate:7:5
+      'Learning rate set to: ' + FloatToStrF(FCurrentLearningRate, ffFixed, 7, 5)
     );
   end;
 end;
@@ -1205,18 +1495,21 @@ end;
 constructor TNeuralImageFit.Create();
 begin
   inherited Create();
+  FIsSoftmax := true;
   FMaxCropSize := 8;
   FHasImgCrop := false;
+  FHasResizing := True;
   FHasFlipX := true;
   FHasFlipY := false;
   FHasMakeGray := true;
-  FIsSoftmax := true;
   FColorEncoding := 0;
   FMultipleSamplesAtValidation := true;
+  FTrainingSampleProcessedCnt := TNNetVolume.Create;
 end;
 
 destructor TNeuralImageFit.Destroy();
 begin
+  FTrainingSampleProcessedCnt.Free;
   inherited Destroy;
 end;
 
@@ -1246,6 +1539,7 @@ begin
   FCurrentStep := 0;
   FCurrentLearningRate := FInitialLearningRate;
   FImgVolumes := pImgVolumes;
+  FTrainingSampleProcessedCnt.Resize(FImgVolumes.Count);
   FImgValidationVolumes := pImgValidationVolumes;
   FImgTestVolumes := pImgTestVolumes;
   FThreadNum := Min(FMaxThreadNum, FDefaultThreadCount);
@@ -1301,15 +1595,17 @@ begin
 
   if FVerbose then
   begin
-    WriteLn('Learning rate:',FCurrentLearningRate:8:6,
-      ' L2 decay:', FL2Decay:8:6,
-      ' Inertia:', FInertia:8:6,
-      ' Batch size:', FBatchSize,
-      ' Step size:', FStepSize,
-      ' Staircase ephocs:',FStaircaseEpochs);
-    if Assigned(FImgVolumes) then WriteLn('Training images:', FImgVolumes.Count);
-    if Assigned(FImgValidationVolumes) then WriteLn('Validation images:', FImgValidationVolumes.Count);
-    if Assigned(FImgTestVolumes) then WriteLn('Test images:', FImgTestVolumes.Count);
+    MessageProc(
+      'Learning rate:' + FloatToStrF(FCurrentLearningRate,ffFixed,8,6) +
+      ' L2 decay:' + FloatToStrF(FL2Decay,ffFixed,8,6) +
+      ' Inertia:' + FloatToStrF(FInertia,ffFixed,8,6) +
+      ' Batch size:' + IntToStr(FBatchSize) +
+      ' Step size:' + IntToStr(FStepSize) +
+      ' Staircase ephocs:' + IntToStr(FStaircaseEpochs)
+    );
+    if Assigned(FImgVolumes) then MessageProc('Training images: '+IntToStr(FImgVolumes.Count));
+    if Assigned(FImgValidationVolumes) then MessageProc('Validation images: '+IntToStr(FImgValidationVolumes.Count));
+    if Assigned(FImgTestVolumes) then MessageProc('Test images: '+IntToStr(FImgTestVolumes.Count));
   end;
 
   FThreadNN.SetLearningRate(FCurrentLearningRate, FInertia);
@@ -1331,6 +1627,7 @@ begin
     FGlobalErrorSum := 0;
     startTime := Now();
     CheckLearningRate(FCurrentEpoch);
+    // the following for command will run 1 epoch
     for I := 1 to (FImgVolumes.Count div FStepSize) {$IFDEF MakeQuick}div 10{$ENDIF} do
     begin
       if (FShouldQuit) then break;
@@ -1373,11 +1670,11 @@ begin
         if (FCurrentEpoch = FInitialEpoch) and (I = 1) then
         begin
           AccuracyWithInertia := CurrentAccuracy;
-        end else if (FStepSize < 100) then
+        end else if (FStepSize < 1280) then
         begin
           AccuracyWithInertia := AccuracyWithInertia*0.99 + CurrentAccuracy*0.01;
         end
-        else if (FStepSize < 500) then
+        else if (FStepSize < 5120) then
         begin
           AccuracyWithInertia := AccuracyWithInertia*0.9 + CurrentAccuracy*0.1;
         end
@@ -1391,23 +1688,28 @@ begin
       if ( (FGlobalTotal > 0) and (I mod 10 = 0) ) then
       begin
         totalTimeSeconds := (Now() - startTime) * 24 * 60 * 60;
-        if FVerbose then WriteLn
+        if FVerbose then MessageProc
         (
-          (FGlobalHit + FGlobalMiss)*I + FCurrentEpoch*FImgVolumes.Count,
-          ' Examples seen. Accuracy:', (TrainingAccuracy):6:4,
-          ' Error:', TrainingError:10:5,
-          ' Loss:', TrainingLoss:7:5,
-          ' Threads: ', FThreadNum,
-          ' Forward time:', (FNN.ForwardTime * 24 * 60 * 60):6:2,'s',
-          ' Backward time:', (FNN.BackwardTime * 24 * 60 * 60):6:2,'s',
-          ' Step time:', totalTimeSeconds:6:2,'s'
+          IntToStr((FGlobalHit + FGlobalMiss) * I + FCurrentEpoch*FImgVolumes.Count) +
+          ' Examples seen. Accuracy: ' + FloatToStrF(FTrainingAccuracy,ffFixed,6,4) +
+          ' Error: ' + FloatToStrF(TrainingError,ffFixed,10,5) +
+          ' Loss: ' + FloatToStrF(TrainingLoss,ffFixed,7,5) +
+          ' Threads: ' + IntToStr(FThreadNum) +
+          ' Forward time: ' + FloatToStrF(FNN.ForwardTime * 24 * 60 * 60,ffFixed,6,2)+'s' +
+          ' Backward time: ' + FloatToStrF(FNN.BackwardTime * 24 * 60 * 60,ffFixed,6,2)+'s' +
+          ' Step time: ' + FloatToStrF(totalTimeSeconds,ffFixed,6,2) + 's'
         );
 
         startTime := Now();
       end;
       if Assigned(FOnAfterStep) then FOnAfterStep(Self);
       Inc(FCurrentStep);
-    end;
+    end; // of epoch
+    {$IFDEF Debug}
+    FMessageProc(
+      IntToStr(FTrainingSampleProcessedCnt.GetValueCount(0)) +
+      ' of samples haven''t been processed.');
+    {$ENDIF}
 
     Inc(FCurrentEpoch);
 
@@ -1463,13 +1765,14 @@ begin
 
         if (FGlobalTotal > 0) and (FVerbose) then
         begin
-          WriteLn(
-            'Epochs: ',FCurrentEpoch,
-            ' Examples seen:', FCurrentEpoch * FImgVolumes.Count,
-            ' Validation Accuracy: ', ValidationRate:6:4,
-            ' Validation Error: ', ValidationError:6:4,
-            ' Validation Loss: ', ValidationLoss:6:4,
-            ' Total time: ', (((Now() - globalStartTime)) * 24 * 60): 6: 2, 'min'
+          FMessageProc(
+            'Epochs: ' + IntToStr(FCurrentEpoch) +
+            ' Examples seen:' + IntToStr(FCurrentEpoch * FImgVolumes.Count) +
+            ' Validation Accuracy: ' + FloatToStrF(ValidationRate,ffFixed,6,4) +
+            ' Validation Error: ' + FloatToStrF(ValidationError,ffFixed,6,4) +
+            ' Validation Loss: ' + FloatToStrF(ValidationLoss,ffFixed,6,4) +
+            ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
+            'min'
           );
         end;
 
@@ -1514,13 +1817,14 @@ begin
 
           if (FGlobalTotal > 0) and (FVerbose) then
           begin
-            WriteLn(
-              'Epochs: ',FCurrentEpoch,
-              ' Examples seen:', FCurrentEpoch * FImgVolumes.Count,
-              ' Test Accuracy: ', TestRate:6:4,
-              ' Test Error: ', TestError:6:4,
-              ' Test Loss: ', TestLoss:6:4,
-              ' Total time: ', (((Now() - globalStartTime)) * 24 * 60): 6: 2, 'min'
+            FMessageProc(
+              'Epochs: ' + IntToStr(FCurrentEpoch) +
+              ' Examples seen:' + IntToStr(FCurrentEpoch * FImgVolumes.Count) +
+              ' Test Accuracy: ' + FloatToStrF(TestRate,ffFixed,6,4) +
+              ' Test Error: ' + FloatToStrF(TestError,ffFixed,6,4) +
+              ' Test Loss: ' + FloatToStrF(TestLoss,ffFixed,6,4) +
+              ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
+              'min'
             );
           end;
         end;
@@ -1574,12 +1878,12 @@ begin
       Append(CSVFile);
 
       MessageProc(
-        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/60,ffGeneral,1,4)+' minutes.' +
-        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/3600,ffGeneral,1,4)+' hours.');
+        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/60,ffFixed,1,4)+' minutes.' +
+        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/3600,ffFixed,1,4)+' hours.');
 
       MessageProc(
         'Epochs: '+IntToStr(FCurrentEpoch)+
-        '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffGeneral,4,2)+' hours.');
+        '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffFixed,4,2)+' hours.');
     end;
   end;
 
@@ -1627,14 +1931,17 @@ begin
   begin
     if (FShouldQuit) then Break;
     ImgIdx := Random(FImgVolumes.Count);
+    ImgIdx := FTrainingSampleProcessedCnt.GetSmallestIdxInRange(ImgIdx, 100);
+    FTrainingSampleProcessedCnt.FData[ImgIdx] := FTrainingSampleProcessedCnt.FData[ImgIdx] + 1;
 
     if FDataAugmentation then
     begin
       if FHasImgCrop then
       begin
         ImgInput.CopyCropping(FImgVolumes[ImgIdx], random(FMaxCropSize), random(FMaxCropSize), FImgVolumes[ImgIdx].SizeX-FMaxCropSize, FImgVolumes[ImgIdx].SizeY-FMaxCropSize);
-      end
-      else
+      end;
+
+      if FHasResizing then
       begin
         CropSizeX := random(FMaxCropSize + 1);
         CropSizeY := random(FMaxCropSize + 1);
@@ -1701,7 +2008,7 @@ begin
     end
     else
     begin
-      WriteLn('Error - invalid output value:',OutputValue);
+      FErrorProc('Error - invalid output value at loss function:' + FloatToStrF(OutputValue,ffFixed,6,4));
       CurrentLoss := 1;
     end;
     LocalTotalLoss := LocalTotalLoss + CurrentLoss;
@@ -1795,6 +2102,11 @@ begin
   StartPos  := BlockSize * index;
   FinishPos := BlockSize * (index + 1) - 1;
 
+  if index = (FThreadNum-1) then
+  begin
+    FinishPos := FWorkingVolumes.Count - 1;
+  end;
+
   LocalNN := FThreadNN[Index];
   LocalNN.CopyWeights(FAvgWeight);
   LocalNN.EnableDropouts(false);
@@ -1857,7 +2169,10 @@ begin
     end
     else
     begin
-      WriteLn('Error - invalid output value:',OutputValue);
+      FErrorProc(
+        'Error - invalid output value at loss function:' +
+        FloatToStrF(OutputValue,ffFixed,6,4)
+      );
       CurrentLoss := 1;
     end;
     LocalTotalLoss := LocalTotalLoss + CurrentLoss;
@@ -1888,7 +2203,7 @@ begin
   pOutput.Free;
 end;
 
-procedure TNeuralImageFit.ClassifyImage(pNN: TNNet; pImgInput, pOutput: TNNetVolume);
+procedure TNeuralFitWithImageBase.ClassifyImage(pNN: TNNet; pImgInput, pOutput: TNNetVolume);
 var
   ImgInput, ImgInputCp: TNNetVolume;
   sumOutput: TNNetVolume;
@@ -1896,7 +2211,7 @@ var
 begin
   ImgInput := TNNetVolume.Create();
   ImgInputCp := TNNetVolume.Create();
-  sumOutput := TNNetVolume.Create(FNumClasses,1,1);
+  sumOutput := TNNetVolume.Create(pNN.GetLastLayer().Output);
 
   ImgInput.Copy( pImgInput );
   pNN.Compute( ImgInput );
@@ -1933,6 +2248,18 @@ begin
   sumOutput.Free;
   ImgInputCp.Free;
   ImgInput.Free;
+end;
+
+procedure TNeuralFitWithImageBase.EnableDefaultImageTreatment();
+begin
+  FMaxCropSize := 8;
+  FHasImgCrop := false;
+  FHasResizing := True;
+  FHasFlipX := True;
+  FHasFlipY := false;
+  FHasMakeGray := True;
+  FColorEncoding := 0;
+  FMultipleSamplesAtValidation := True;
 end;
 
 end.
