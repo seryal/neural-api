@@ -192,8 +192,8 @@ This API is really big. The following list gives a general idea about this API b
 * `TNNetDepthwiseConvLinear` (input/output: 1D, 2D or 3D).
 * `TNNet.AddSeparableConvReLU` (input/output: 1D, 2D or 3D). Adds a separable convolution.
 * `TNNet.AddSeparableConvLinear` (input/output: 1D, 2D or 3D). Adds a separable convolution.
-* `TNNet.AddConvOrSeparableConv` (input/output: 1D, 2D or 3D). Adds a convolution or a separable convolutions with/without ReLU and normalization.
-* `TNNet.AddGroupedConvolution` (input/output: 1D, 2D or 3D). Adds grouped convolutions. 
+* `TNNet.AddConvOrSeparableConv` (input/output: 1D, 2D or 3D). Adds a convolution or a separable convolution with/without ReLU and normalization.
+* `TNNet.AddGroupedConvolution` (input/output: 1D, 2D or 3D). Adds a grouped convolution. 
 
 ### Fully Connected (Dense) Layers
 * `TNNetFullConnect` (input/output: 1D, 2D or 3D).
@@ -253,6 +253,7 @@ This API is really big. The following list gives a general idea about this API b
 * `TNNetSELU` (input/output: 1D, 2D or 3D).
 * `TNNetSigmoid` (input/output: 1D, 2D or 3D).
 * `TNNetSoftMax` (input/output: 1D, 2D or 3D).
+* `TNNetSwish` (input/output: 1D, 2D or 3D).
 * `TNNetHyperbolicTangent` (input/output: 1D, 2D or 3D).
 * `TNNetPower` (input/output: 1D, 2D or 3D).
 
@@ -285,6 +286,46 @@ This API is really big. The following list gives a general idea about this API b
 * `procedure CopyResizing(Original: TVolume; NewSizeX, NewSizeY: integer);`
 * `procedure AddGaussianNoise(pMul: TNeuralFloat);`
 * `procedure AddSaltAndPepper(pNum: integer; pSalt: integer = 2; pPepper: integer = -2);`
+
+### Closest Layer Types to Other APIs (work in progress)
+
+NEURAL                      | Keras                                 | PyTorch
+--------------------------- | ------------------------------------- | -------------------------
+`TNNetFullConnect`          | `layers.Dense(activation='tanh')`     | `nn.Linear nn.Tanh()`
+`TNNetFullConnectReLU`      | `layers.Dense(activation='relu')`     | `nn.Linear nn.ReLU()`
+`TNNetFullConnectLinear`    | `layers.Dense(activation=None)`       | `nn.Linear`
+`TNNetFullConnectSigmoid`   | `layers.Dense(activation='sigmoid')`  | `nn.Linear nn.Sigmoid()`
+`TNNetReLU`                 | `activations.relu`                    | `nn.ReLU()`
+`TNNetLeakyReLU`            | `activations.relu(alpha=0.01)`        | `nn.LeakyReLU(0.01)`
+`TNNetVeryLeakyReLU`        | `activations.relu(alpha=1/3)`         | `nn.LeakyReLU(1/3)`
+`TNNetReLUSqrt`             |                                       |           
+`TNNetSELU`                 | `activations.selu`                    | `nn.SELU`
+`TNNetSigmoid`              | `activations.sigmoid`                 | `nn.Sigmoid`
+`TNNetSoftMax`              | `activations.softmax`                 | `nn.Softmax`
+`TNNetHyperbolicTangent`    | `activations.tanh`                    | `nn.Tanh`
+`TNNetPower`                |                                       |           
+`TNNetAvgPool`              | `layers.AveragePooling2D`             | `nn.AvgPool2d`
+`TNNetMaxPool`              | `layers.MaxPool2D`                    | `nn.MaxPool2d`
+`TNNetMaxPoolPortable`      | `layers.MaxPool2D`                    | `nn.MaxPool2d`
+`TNNetMinPool`              |                                       |              
+`TNNet.AddMinMaxPool`       |                                       |              
+`TNNet.AddAvgMaxPool`       |                                       |              
+`TNNetAvgChannel`           | `layers.GlobalAveragePooling2D`       | `nn.AvgPool2d`
+`TNNetMaxChannel`           | `layers.GlobalMaxPool2D`              | `nn.MaxPool2d`
+`TNNetMinChannel`           |                                       |           
+`TNNet.AddMinMaxChannel`      |                                       |           
+`TNNet.AddAvgMaxChannel`      | [cai.layers.GlobalAverageMaxPooling2D](https://github.com/joaopauloschuler/k-neural-api/blob/master/cai/layers.py) |  
+`TNNetConcat`                 | `layers.Concatenate(axis=1)`          | `torch.cat`
+`TNNetDeepConcat`             | `layers.Concatenate(axis=3)`          | `torch.cat`
+`TNNetIdentity`               |                                       | `nn.Identity`
+`TNNetIdentityWithoutBackprop`|                                       |             
+`TNNetReshape`                | `layers.Reshape`                      | `torch.reshape`
+`TNNetSplitChannels`          | [cai.layers.CopyChannels](https://github.com/joaopauloschuler/k-neural-api/blob/master/cai/layers.py) | 
+`TNNetSplitChannelEvery`      |                                       |           
+`TNNetSum`                    | `layers.Add`                          | `torch.add`
+`TNNetCellMulByCell`          | `layers.Multiply`                     |           
+`TNNetChannelMulByLayer`      | `layers.Multiply`                     |           
+
 
 ## Adding Layers
 You can add layers one by one or you can add an array of layers in one go. Follows an example adding layers one by one:

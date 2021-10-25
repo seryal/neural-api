@@ -140,12 +140,15 @@ type
       FHasFlipY: boolean;
       FHasResizing: boolean;
       FColorEncoding: integer;
+      FChannelShiftRate: TNeuralFloat;
     public
       constructor Create(); override;
       destructor Destroy(); override;
       procedure ClassifyImage(pNN: TNNet; pImgInput, pOutput: TNNetVolume);
       procedure EnableDefaultImageTreatment(); virtual;
 
+      // ChannelShiftRate: 0 means no augmentation. 0.1 means 10% of maximum change per channel.
+      property ChannelShiftRate: TNeuralFloat read FChannelShiftRate write FChannelShiftRate;
       property HasImgCrop: boolean read FHasImgCrop write FHasImgCrop;
       property HasMakeGray: boolean read FHasMakeGray write FHasMakeGray;
       property HasFlipX: boolean read FHasFlipX write FHasFlipX;
@@ -468,6 +471,7 @@ begin
   FHasMakeGray := false;
   FColorEncoding := 0;
   FMultipleSamplesAtValidation := false;
+  FChannelShiftRate := 0;
 end;
 
 destructor TNeuralFitWithImageBase.Destroy();
@@ -892,6 +896,8 @@ var
   InitialWeightSum, FinalWeightSum: TNeuralFloat;
   {$ENDIF}
   CropSizeX, CropSizeY: integer;
+  DepthCnt: integer;
+  LocalChannelShiftRate: TNeuralFloat;
 begin
   vInput     := TNNetVolume.Create();
   pOutput    := TNNetVolume.Create();
@@ -943,14 +949,23 @@ begin
       begin
         vInputCopy.CopyCropping(vInput, random(FMaxCropSize), random(FMaxCropSize), vInput.SizeX-FMaxCropSize, vInput.SizeY-FMaxCropSize);
         vInput.Copy(vInputCopy);
-      end;
-
-      if FHasResizing then
+      end
+      else if FHasResizing then
       begin
         CropSizeX := random(FMaxCropSize + 1);
         CropSizeY := random(FMaxCropSize + 1);
         vInputCopy.CopyCropping(vInput, random(CropSizeX), random(CropSizeY), vInput.SizeX-CropSizeX, vInput.SizeY-CropSizeY);
         vInput.CopyResizing(vInputCopy, vInput.SizeX, vInput.SizeY);
+      end;
+
+      if FChannelShiftRate > 0 then
+      begin
+        for DepthCnt := 0 to vInput.Depth - 1 do
+        begin
+          LocalChannelShiftRate := ((random(10000) - 5000) / 5000);
+          LocalChannelShiftRate := 1 + (LocalChannelShiftRate * LocalChannelShiftRate);
+          vInput.MulAtDepth(DepthCnt, LocalChannelShiftRate);
+        end;
       end;
 
       if (vInput.Depth = 3) then
@@ -1505,6 +1520,7 @@ begin
   FColorEncoding := 0;
   FMultipleSamplesAtValidation := true;
   FTrainingSampleProcessedCnt := TNNetVolume.Create;
+  FChannelShiftRate := 0;
 end;
 
 destructor TNeuralImageFit.Destroy();
@@ -1906,6 +1922,8 @@ var
   OutputValue, CurrentLoss: TNeuralFloat;
   LocalHit, LocalMiss: integer;
   LocalTotalLoss, LocalErrorSum: TNeuralFloat;
+  DepthCnt: integer;
+  LocalChannelShiftRate: TNeuralFloat;
 begin
   ImgInput := TNNetVolume.Create();
   ImgInputCp := TNNetVolume.Create();
@@ -1939,14 +1957,27 @@ begin
       if FHasImgCrop then
       begin
         ImgInput.CopyCropping(FImgVolumes[ImgIdx], random(FMaxCropSize), random(FMaxCropSize), FImgVolumes[ImgIdx].SizeX-FMaxCropSize, FImgVolumes[ImgIdx].SizeY-FMaxCropSize);
-      end;
-
-      if FHasResizing then
+      end
+      else if FHasResizing then
       begin
         CropSizeX := random(FMaxCropSize + 1);
         CropSizeY := random(FMaxCropSize + 1);
         ImgInputCp.CopyCropping(FImgVolumes[ImgIdx], random(CropSizeX), random(CropSizeY),FImgVolumes[ImgIdx].SizeX-CropSizeX, FImgVolumes[ImgIdx].SizeY-CropSizeY);
         ImgInput.CopyResizing(ImgInputCp, FImgVolumes[ImgIdx].SizeX, FImgVolumes[ImgIdx].SizeY);
+      end
+      else
+      begin
+        ImgInput.Copy(FImgVolumes[ImgIdx]);
+      end;
+
+      if FChannelShiftRate > 0 then
+      begin
+        for DepthCnt := 0 to ImgInput.Depth - 1 do
+        begin
+          LocalChannelShiftRate := ((random(10000) - 5000) / 5000);
+          LocalChannelShiftRate := 1 + (LocalChannelShiftRate * FChannelShiftRate);
+          ImgInput.MulAtDepth(DepthCnt, LocalChannelShiftRate);
+        end;
       end;
 
       if (ImgInput.Depth = 3) then
@@ -1967,7 +1998,8 @@ begin
         ImgInput.FlipY();
       end;
     end
-    else begin
+    else
+    begin
       ImgInput.Copy(FImgVolumes[ImgIdx]);
     end;
     ImgInput.Tag := FImgVolumes[ImgIdx].Tag;
