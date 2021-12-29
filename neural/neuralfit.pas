@@ -83,6 +83,8 @@ type
       FOnAfterStep, FOnAfterEpoch, FOnStart: TNotifyEvent;
       FRunning, FShouldQuit: boolean;
       FTrainingAccuracy, FValidationAccuracy, FTestAccuracy: TNeuralFloat;
+      FLoadBestAdEnd: boolean;
+      FTestBestAtEnd: boolean;
       {$IFDEF OpenCL}
       FPlatformId: cl_platform_id;
       FDeviceId: cl_device_id;
@@ -100,6 +102,8 @@ type
 
       property AvgWeightEpochCount: integer read FAvgWeightEpochCount write FAvgWeightEpochCount;
       property AvgNN: TNNet read FAvgWeight;
+      /// ClipDelta is a per neuron absolute max normalization.
+      // This is useful for This is useful for making SGD numerically stable.
       property ClipDelta: single read FClipDelta write FClipDelta;
       property CurrentEpoch: integer read FCurrentEpoch;
       property CurrentStep: integer read FCurrentStep;
@@ -112,6 +116,7 @@ type
       property InitialEpoch: integer read FInitialEpoch write FInitialEpoch;
       property InitialLearningRate: single read FInitialLearningRate write FInitialLearningRate;
       property LearningRateDecay: single read FLearningRateDecay write FLearningRateDecay;
+      property LoadBestAtEnd: boolean read FLoadBestAdEnd write FLoadBestAdEnd;
       property L2Decay: single read FL2Decay write FL2Decay;
       property MaxThreadNum: integer read FMaxThreadNum write FMaxThreadNum;
       property Momentum: single read FInertia write FInertia;
@@ -122,6 +127,7 @@ type
       property OnStart: TNotifyEvent read FOnStart write FOnStart;
       property StaircaseEpochs: integer read FStaircaseEpochs write FStaircaseEpochs;
       property TargetAccuracy: single read FTargetAccuracy write FTargetAccuracy;
+      property TestBestAtEnd: boolean read FTestBestAtEnd write FTestBestAtEnd;
       property ValidationAccuracy: TNeuralFloat read FValidationAccuracy;
       property Verbose: boolean read FVerbose write FVerbose;
       property TestAccuracy: TNeuralFloat read FTestAccuracy;
@@ -526,13 +532,37 @@ procedure TNeuralDataLoadingFit.FitLoading(pNN: TNNet; TrainingCnt,
   pGetTrainingPair, pGetValidationPair,
   pGetTestPair: TNNetGetPairFn);
 var
+  globalStartTime: double;
+  TestError, TestLoss, TestRate: TNeuralFloat;
+  procedure RunTest();
+  begin
+          RunTestBatch(TestCnt);
+          if FGlobalTotal > 0 then
+          begin
+            TestRate  := FGlobalHit / FGlobalTotal;
+            TestLoss  := FGlobalTotalLoss / FGlobalTotal;
+            TestError := FGlobalErrorSum / FGlobalTotal;
+            FTestAccuracy := TestRate;
+          end;
+          if (FGlobalTotal > 0) and (FVerbose) then
+          begin
+            FMessageProc(
+              'Epochs: ' + IntToStr(FCurrentEpoch) +
+              ' Examples seen:' + IntToStr(FCurrentEpoch * TrainingCnt) +
+              ' Test Accuracy: ' + FloatToStrF(TestRate,ffFixed,6,4) +
+              ' Test Error: ' + FloatToStrF(TestError,ffFixed,6,4) +
+              ' Test Loss: ' + FloatToStrF(TestLoss,ffFixed,6,4) +
+              ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
+              'min'
+            );
+          end;
+  end;
+var
   I: integer;
   startTime, totalTimeSeconds: double;
-  globalStartTime: double;
   fileName, FileNameCSV: string;
   TrainingError, TrainingLoss: TNeuralFloat;
   ValidationError, ValidationLoss, ValidationRate: TNeuralFloat;
-  TestError, TestLoss, TestRate: TNeuralFloat;
   CSVFile: TextFile;
   CurrentAccuracy, AccuracyWithInertia: TNeuralFloat;
   ValidationRecord: TNeuralFloat;
@@ -697,6 +727,12 @@ begin
         end;
       end;// Assigned(pGetValidationPair)
 
+      if (ValidationCnt=0) then
+      begin
+        FMessageProc('Saving NN at '+fileName);
+        FAvgWeight.SaveToFile(fileName);
+      end;
+
       if (FCurrentEpoch mod FThreadNN.Count = 0) and (FVerbose) then
       begin
         FThreadNN[0].DebugWeights();
@@ -706,26 +742,7 @@ begin
       begin
         if ( (FCurrentEpoch mod 10 = 0) and (FCurrentEpoch > 0) ) then
         begin
-          RunTestBatch(TestCnt);
-          if FGlobalTotal > 0 then
-          begin
-            TestRate  := FGlobalHit / FGlobalTotal;
-            TestLoss  := FGlobalTotalLoss / FGlobalTotal;
-            TestError := FGlobalErrorSum / FGlobalTotal;
-            FTestAccuracy := TestRate;
-          end;
-          if (FGlobalTotal > 0) and (FVerbose) then
-          begin
-            FMessageProc(
-              'Epochs: ' + IntToStr(FCurrentEpoch) +
-              ' Examples seen:' + IntToStr(FCurrentEpoch * TrainingCnt) +
-              ' Test Accuracy: ' + FloatToStrF(TestRate,ffFixed,6,4) +
-              ' Test Error: ' + FloatToStrF(TestError,ffFixed,6,4) +
-              ' Test Loss: ' + FloatToStrF(TestLoss,ffFixed,6,4) +
-              ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
-              'min'
-            );
-          end;
+          RunTest();
         end;
         if (TestRate >= FTargetAccuracy) then
         begin
@@ -784,6 +801,46 @@ begin
         '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffFixed,4,2)+' hours.');
     end;
     if Assigned(FOnAfterEpoch) then FOnAfterEpoch(Self);
+  end;
+
+  if TestBestAtEnd and
+    (TestCnt > 0) and
+    Not(FShouldQuit) and
+    (Assigned(FGetTestPair) or Assigned(FGetTestProc)) then
+  begin
+    if FileExists(filename) then
+    begin
+      MessageProc('Loading '+filename+' for final test.');
+      FAvgWeight.LoadFromFile(filename);
+      RunTest();
+      WriteLn
+      (
+        CSVFile,
+        'FINAL TEST',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        Round( (Now() - globalStartTime) * 24 * 60 * 60),',',
+        TestRate:6:4,',',
+        TestLoss:6:4,',',
+        TestError:6:4
+      );
+    end;
+  end;
+
+  if FLoadBestAdEnd and FileExists(filename) then
+  begin
+    MessageProc('Loading best performing results '+filename+'.');
+    FNN.LoadFromFile(filename);
+  end
+  else
+  begin
+    // Final weights are the averaged weights.
+    FNN.CopyWeights(FAvgWeight);
   end;
 
   CloseFile(CSVFile);
@@ -1419,6 +1476,8 @@ begin
   FShouldQuit := false;
   FCurrentEpoch := 0;
   FCurrentStep := 0;
+  FLoadBestAdEnd := True;
+  FTestBestAtEnd := True;
 end;
 
 destructor TNeuralFitBase.Destroy();
@@ -1533,13 +1592,52 @@ procedure TNeuralImageFit.Fit(pNN: TNNet;
   pImgVolumes, pImgValidationVolumes, pImgTestVolumes: TNNetVolumeList;
   pNumClasses, pBatchSize, Epochs: integer);
 var
+  TestError, TestLoss, TestRate: TNeuralFloat;
+  globalStartTime: double;
+  procedure RunTest();
+  begin
+          FWorkingVolumes := FImgTestVolumes;
+          FGlobalHit       := 0;
+          FGlobalMiss      := 0;
+          FGlobalTotalLoss := 0;
+          FGlobalErrorSum  := 0;
+          FMessageProc('Starting Testing.');
+          {$IFDEF HASTHREADS}
+          //ProcThreadPool.DoParallel(@TestNNThread, 0, FThreadNN.Count-1, Nil, FThreadNN.Count);
+          FProcs.StartProc({$IFDEF FPC}@TestNNThread{$ELSE}TestNNThread{$ENDIF});
+          {$ELSE}
+          TestNNThread(0, 1);
+          {$ENDIF}
+
+          FGlobalTotal := (FGlobalHit + FGlobalMiss);
+          if (FGlobalTotal > 0) then
+          begin
+            TestRate  := FGlobalHit / FGlobalTotal;
+            TestLoss  := FGlobalTotalLoss / FGlobalTotal;
+            TestError := FGlobalErrorSum / FGlobalTotal;
+            FTestAccuracy := TestRate;
+          end;
+
+          if (FGlobalTotal > 0) and (FVerbose) then
+          begin
+            FMessageProc(
+              'Epochs: ' + IntToStr(FCurrentEpoch) +
+              ' Examples seen:' + IntToStr(FCurrentEpoch * FImgVolumes.Count) +
+              ' Test Accuracy: ' + FloatToStrF(TestRate,ffFixed,6,4) +
+              ' Test Error: ' + FloatToStrF(TestError,ffFixed,6,4) +
+              ' Test Loss: ' + FloatToStrF(TestLoss,ffFixed,6,4) +
+              ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
+              'min'
+            );
+          end;
+  end;
+var
   I: integer;
   startTime, totalTimeSeconds: double;
-  globalStartTime: double;
   fileName, FileNameCSV: string;
   TrainingError, TrainingLoss: TNeuralFloat;
   ValidationError, ValidationLoss, ValidationRate: TNeuralFloat;
-  TestError, TestLoss, TestRate: TNeuralFloat;
+  LocalHasValidation: boolean;
   CSVFile: TextFile;
   CurrentAccuracy, AccuracyWithInertia: TNeuralFloat;
   MaxDelta: TNeuralFloat;
@@ -1558,6 +1656,14 @@ begin
   FTrainingSampleProcessedCnt.Resize(FImgVolumes.Count);
   FImgValidationVolumes := pImgValidationVolumes;
   FImgTestVolumes := pImgTestVolumes;
+  LocalHasValidation := False;
+  if Assigned(FImgValidationVolumes) then
+  begin
+    if FImgValidationVolumes.Count>0 then
+    begin
+      LocalHasValidation := True;
+    end;
+  end;
   FThreadNum := Min(FMaxThreadNum, FDefaultThreadCount);
   FBatchSize := pBatchSize;
   FMaxEpochs := Epochs;
@@ -1675,6 +1781,7 @@ begin
         end;
       end;
       FNN.UpdateWeights();
+      //Write(FNN.ForceMaxAbsoluteWeight(2):3:2,' ');
       if FL2Decay > 0.0 then FNN.ComputeL2Decay();
 
       FGlobalTotal := (FGlobalHit + FGlobalMiss);
@@ -1748,7 +1855,7 @@ begin
         FAvgWeight.CopyWeights(FNN);
       end;
 
-      if Assigned(FImgValidationVolumes) and Not(FShouldQuit) then
+      if LocalHasValidation and Not(FShouldQuit) then
       begin
         FWorkingVolumes := FImgValidationVolumes;
         FGlobalHit       := 0;
@@ -1800,6 +1907,12 @@ begin
         end;
       end;// Assigned(FImgValidationVolumes)
 
+      if Not(LocalHasValidation) then
+      begin
+        FMessageProc('Saving NN at '+fileName);
+        FAvgWeight.SaveToFile(fileName);
+      end;
+
       if (FCurrentEpoch mod FThreadNN.Count = 0) and (FVerbose) then
       begin
         FThreadNN[0].DebugWeights();
@@ -1809,40 +1922,7 @@ begin
       begin
         if ( (FCurrentEpoch mod 10 = 0) and (FCurrentEpoch > 0) ) then
         begin
-          FWorkingVolumes := FImgTestVolumes;
-          FGlobalHit       := 0;
-          FGlobalMiss      := 0;
-          FGlobalTotalLoss := 0;
-          FGlobalErrorSum  := 0;
-          FMessageProc('Starting Testing.');
-          {$IFDEF HASTHREADS}
-          //ProcThreadPool.DoParallel(@TestNNThread, 0, FThreadNN.Count-1, Nil, FThreadNN.Count);
-          FProcs.StartProc({$IFDEF FPC}@TestNNThread{$ELSE}TestNNThread{$ENDIF});
-          {$ELSE}
-          TestNNThread(0, 1);
-          {$ENDIF}
-
-          FGlobalTotal := (FGlobalHit + FGlobalMiss);
-          if (FGlobalTotal > 0) then
-          begin
-            TestRate  := FGlobalHit / FGlobalTotal;
-            TestLoss  := FGlobalTotalLoss / FGlobalTotal;
-            TestError := FGlobalErrorSum / FGlobalTotal;
-            FTestAccuracy := TestRate;
-          end;
-
-          if (FGlobalTotal > 0) and (FVerbose) then
-          begin
-            FMessageProc(
-              'Epochs: ' + IntToStr(FCurrentEpoch) +
-              ' Examples seen:' + IntToStr(FCurrentEpoch * FImgVolumes.Count) +
-              ' Test Accuracy: ' + FloatToStrF(TestRate,ffFixed,6,4) +
-              ' Test Error: ' + FloatToStrF(TestError,ffFixed,6,4) +
-              ' Test Loss: ' + FloatToStrF(TestLoss,ffFixed,6,4) +
-              ' Total time: ' + FloatToStrF(((Now() - globalStartTime)) * 24 * 60,ffFixed,6,2) +
-              'min'
-            );
-          end;
+          RunTest();
         end;
         if (TestRate >= FTargetAccuracy) then
         begin
@@ -1901,6 +1981,43 @@ begin
         'Epochs: '+IntToStr(FCurrentEpoch)+
         '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffFixed,4,2)+' hours.');
     end;
+  end;
+
+  if TestBestAtEnd and Assigned(FImgTestVolumes) and Not(FShouldQuit) then
+  begin
+    if FileExists(filename) then
+    begin
+      MessageProc('Loading '+filename+' for final test.');
+      FAvgWeight.LoadFromFile(filename);
+      RunTest();
+      WriteLn
+      (
+        CSVFile,
+        'FINAL TEST',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        '',',',
+        Round( (Now() - globalStartTime) * 24 * 60 * 60),',',
+        TestRate:6:4,',',
+        TestLoss:6:4,',',
+        TestError:6:4
+      );
+    end;
+  end;
+
+  if FLoadBestAdEnd and FileExists(filename) then
+  begin
+    MessageProc('Loading best performing results '+filename+'.');
+    FNN.LoadFromFile(filename);
+  end
+  else
+  begin
+    // Final weights are the averaged weights.
+    FNN.CopyWeights(FAvgWeight);
   end;
 
   FProcs.Free;

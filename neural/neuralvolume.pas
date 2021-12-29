@@ -110,6 +110,7 @@ type
     FDepth: integer;
     FTag: array[0..1] of integer;
     FFormatSettings: TFormatSettings;
+    FLastPos: integer;
     function GetTag: integer; {$IFDEF Release} inline; {$ENDIF}
     procedure SetTag(I: integer); {$IFDEF Release} inline; {$ENDIF}
     function GetTags(x: integer): integer; {$IFDEF Release} inline; {$ENDIF}
@@ -180,6 +181,7 @@ type
     procedure Divi(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure ForceMinRange(Value: T); {$IFDEF Release} inline; {$ENDIF}
     procedure ForceMaxRange(Value: T); {$IFDEF Release} inline; {$ENDIF}
+    procedure ForceMaxAbs(Value: T); {$IFDEF Release} inline; {$ENDIF}
     procedure Randomize(a:integer=10000; b:integer=5000; c:integer=5000); {$IFDEF Release} inline; {$ENDIF}
     procedure RandomizeGaussian(pMul: TNeuralFloat = 1.0); {$IFDEF Release} inline; {$ENDIF}
     procedure AddGaussianNoise(pMul: TNeuralFloat); {$IFDEF Release} inline; {$ENDIF}
@@ -3209,6 +3211,19 @@ begin
     FData[I] := NeuronForceRange(FData[I], Value);
 end;
 
+procedure TVolume.ForceMaxAbs(Value: T);
+var
+  VMaxAbs, VFix: Single;
+begin
+  VMaxAbs := GetMaxAbs();
+  if VMaxAbs > Value then
+  begin
+    VFix := Value/VMaxAbs;
+    Self.Mul( VFix );
+    WriteLn(VMaxAbs:6:2);
+  end;
+end;
+
 destructor TVolume.Destroy();
 begin
   SetLength(FData, 0);
@@ -3822,6 +3837,7 @@ begin
   if Length(FData) > 0 then
   begin
     Result := FData[0];
+    FLastPos := 0;
     vHigh := High(FData);
     if vHigh > 0 then
     begin
@@ -3830,6 +3846,7 @@ begin
         if FData[I] > Result then
         begin
           Result := FData[I];
+          FLastPos := I;
         end;
       end;
     end;
@@ -3865,6 +3882,7 @@ begin
   if Length(FData) > 0 then
   begin
     auxSingle := FData[0];
+    FLastPos := 0;
     Result := Abs(auxSingle);
     vHigh := High(FData);
     if vHigh > 0 then
@@ -3875,6 +3893,7 @@ begin
         if Abs(auxSingle) > Result then
         begin
           Result := Abs(auxSingle);
+          FLastPos := I;
         end;
       end;
     end;
@@ -3893,6 +3912,7 @@ begin
   if Length(FData) > 0 then
   begin
     Result := FData[0];
+    FLastPos := 0;
     vHigh := High(FData);
     if vHigh > 0 then
     begin
@@ -3901,6 +3921,7 @@ begin
         if FData[I] < Result then
         begin
           Result := FData[I];
+          FLastPos := I;
         end;
       end;
     end;
@@ -4766,9 +4787,20 @@ begin
 end;
 
 procedure TVolume.PrintDebug();
+var
+  MinVal, MaxVal: TNeuralFloat;
+  MinPos, MaxPos: integer;
 begin
-  Write('(',SizeX,',',SizeY,',',Depth,') - ');
-  Write('Min: ',GetMin(),' Max:',GetMax(),' Avg:',GetAvg(),' Non Zero:',GetNonZero(),' Size:', FSize);
+  MinVal :=  GetMin();
+  MinPos := FLastPos;
+  MaxVal :=  GetMax();
+  MaxPos := FLastPos;
+
+  Write(
+    '(',SizeX,',',SizeY,',',Depth,') - ',
+    'Min: ',MinVal,' Min Pos:',MinPos,
+    ' Max:',MaxVal,' Max Pos:',MaxPos,
+    ' Avg:',GetAvg(),' Non Zero:',GetNonZero(),' Size:', FSize);
 end;
 
 procedure TVolume.PrintDebugChannel();

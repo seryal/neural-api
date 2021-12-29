@@ -10,7 +10,7 @@ This project is a subproject from a bigger and older project called [CAI](https:
 * Pascal is easy to learn and easy to make a readable and understandable source code. You'll be able to make super fast **native** code and at the same time have a readable code.
 
 ## Prerequisites
-You'll need [Lazarus](https://www.lazarus-ide.org/) development environment. If you have an OpenCL capable device, you'll need its OpenCL drivers.
+You'll need [Lazarus](https://www.lazarus-ide.org/) development environment. If you have an OpenCL capable device, you'll need its OpenCL drivers. Many examples use the [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html) dataset. You'll also find examples for the [CIFAR-100](https://www.cs.toronto.edu/~kriz/cifar.html), [MNIST](http://yann.lecun.com/exdb/mnist/), [Fashion MNIST](https://www.kaggle.com/zalando-research/fashionmnist) and the [Places365-Standard Small images 256x256](http://places2.csail.mit.edu/download.html) dataset.
 
 ## Will It Work with Delphi?
 This project is [Lazarus](https://www.lazarus-ide.org/) based. That said, as of release [v0.98](https://github.com/joaopauloschuler/neural-api/releases/tag/v0.98), a number of units do compile with Delphi and you can create and run neural networks with Delphi. You'll be able to compile these units with Delphi: neuralvolume, neuralnetwork, neuralab, neuralabfun, neuralbit, neuralbyteprediction, neuralcache, neuraldatasets, neuralgeneric, neuralplanbuilder, Neural OpenCL, Neural Threading and neuralfit. 
@@ -76,6 +76,7 @@ it's mentioned.
 ### Advanced Examples
 Although these examples require deeper understanding about neural networks, they are very interesting:
 * [DenseNetBC L40](https://github.com/joaopauloschuler/neural-api/tree/master/examples/DenseNetBCL40)
+* [ResNet-20](https://github.com/joaopauloschuler/neural-api/blob/master/examples/ResNet/ResNet20.lpr)
 * [Separable Convolutions](https://github.com/joaopauloschuler/neural-api/tree/master/examples/SeparableConvolution) - MobileNet building block
 * [Identity Shortcut Connection](https://github.com/joaopauloschuler/neural-api/tree/master/examples/IdentityShortcutConnection) - ResNet building block [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/joaopauloschuler/neural-api/blob/master/examples/IdentityShortcutConnection/IdentityShortcutConnection.ipynb)
 * [Gradient Ascent](https://github.com/joaopauloschuler/neural-api/tree/master/examples/GradientAscent) - Visualizing patterns from inner neurons in image classification <p><img src="https://github.com/joaopauloschuler/neural-api/blob/master/docs/gradientascent3layer.jpg" height="130"></img></p>
@@ -247,6 +248,8 @@ This API is really big. The following list gives a general idea about this API b
 
 ### Layers with Activation Functions and no Trainable Parameter
 * `TNNetReLU` (input/output: 1D, 2D or 3D).
+* `TNNetReLU6` (input/output: 1D, 2D or 3D).
+* `TNNetReLUL` (input/output: 1D, 2D or 3D).
 * `TNNetLeakyReLU` (input/output: 1D, 2D or 3D).
 * `TNNetVeryLeakyReLU` (input/output: 1D, 2D or 3D).
 * `TNNetReLUSqrt` (input/output: 1D, 2D or 3D).
@@ -254,6 +257,7 @@ This API is really big. The following list gives a general idea about this API b
 * `TNNetSigmoid` (input/output: 1D, 2D or 3D).
 * `TNNetSoftMax` (input/output: 1D, 2D or 3D).
 * `TNNetSwish` (input/output: 1D, 2D or 3D).
+* `TNNetSwish6` (input/output: 1D, 2D or 3D).
 * `TNNetHyperbolicTangent` (input/output: 1D, 2D or 3D).
 * `TNNetPower` (input/output: 1D, 2D or 3D).
 
