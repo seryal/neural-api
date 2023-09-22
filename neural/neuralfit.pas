@@ -155,6 +155,8 @@ type
       constructor Create(); override;
       destructor Destroy(); override;
       procedure ClassifyImage(pNN: TNNet; pImgInput, pOutput: TNNetVolume);
+      procedure ClassifyImageFromFile(pNN: TNNet; pFilename: string; pOutput: TNNetVolume); overload;
+      function ClassifyImageFromFile(pNN: TNNet; pFilename: string):integer; overload;
       procedure EnableDefaultImageTreatment(); virtual;
 
       // ChannelShiftRate: 0 means no augmentation. 0.1 means 10% of maximum change per channel.
@@ -732,12 +734,6 @@ begin
         end;
       end;// Assigned(pGetValidationPair)
 
-      if (ValidationCnt=0) then
-      begin
-        FMessageProc('Saving NN at '+fileName);
-        FAvgWeight.SaveToFile(fileName);
-      end;
-
       if (FCurrentEpoch mod FThreadNN.Count = 0) and (FVerbose) then
       begin
         FThreadNN[0].DebugWeights();
@@ -756,9 +752,14 @@ begin
           break;
         end;
       end;
-
-      if ( (FCurrentEpoch mod 10 = 0) and (FCurrentEpoch > 0) ) then
-      begin
+    end
+    else
+    begin
+      FMessageProc('Skipping Validation. Saving NN at '+fileName);
+      FAvgWeight.SaveToFile(fileName);
+    end;
+    if ( (FCurrentEpoch mod 10 = 0) and (FCurrentEpoch > 0) ) then
+    begin
         WriteLn
         (
           CSVFile,
@@ -775,9 +776,9 @@ begin
           TestLoss:6:4,',',
           TestError:6:4
         );
-      end
-      else
-      begin
+    end
+    else
+    begin
         WriteLn
         (
           CSVFile,
@@ -791,20 +792,20 @@ begin
           FCurrentLearningRate:9:7,',',
           Round( (Now() - globalStartTime) * 24 * 60 * 60),',,,'
         );
-      end;
-
-      CloseFile(CSVFile);
-      AssignFile(CSVFile, FileNameCSV);
-      Append(CSVFile);
-
-      MessageProc(
-        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*10))/60,ffFixed,1,4)+' minutes.' +
-        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*10))/3600,ffFixed,1,4)+' hours.');
-
-      MessageProc(
-        'Epochs: '+IntToStr(FCurrentEpoch)+
-        '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffFixed,4,2)+' hours.');
     end;
+
+    CloseFile(CSVFile);
+    AssignFile(CSVFile, FileNameCSV);
+    Append(CSVFile);
+
+    MessageProc(
+      'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*10))/60,ffFixed,1,4)+' minutes.' +
+      ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*10))/3600,ffFixed,1,4)+' hours.');
+
+    MessageProc(
+      'Epochs: '+IntToStr(FCurrentEpoch)+
+      '. Working time: '+FloatToStrF(Round((Now() - globalStartTime)*2400)/100,ffFixed,4,2)+' hours.');
+
     if Assigned(FOnAfterEpoch) then FOnAfterEpoch(Self);
   end;
 
@@ -2424,6 +2425,16 @@ begin
       sumOutput.Add( pOutput );
     end;
 
+    if FHasFlipY then
+    begin
+      ImgInput.FlipY();
+      TotalDiv := TotalDiv + 1;
+      pNN.Compute( ImgInput );
+      pNN.GetOutput( pOutput );
+      sumOutput.Add( pOutput );
+      ImgInput.FlipY();
+    end;
+
     if FMaxCropSize >= 2 then
     begin
       ImgInputCp.CopyCropping(ImgInput, FMaxCropSize div 2, FMaxCropSize div 2, ImgInput.SizeX - FMaxCropSize, ImgInput.SizeY - FMaxCropSize);
@@ -2441,6 +2452,38 @@ begin
   sumOutput.Free;
   ImgInputCp.Free;
   ImgInput.Free;
+end;
+
+procedure TNeuralFitWithImageBase.ClassifyImageFromFile(pNN: TNNet;
+  pFilename: string; pOutput: TNNetVolume);
+var
+  vInputImage: TNNetVolume;
+  InputSizeX, InputSizeY, NumberOfClasses: integer;
+begin
+  vInputImage := TNNetVolume.Create();
+  InputSizeX := pNN.Layers[0].Output.SizeX;
+  InputSizeY := pNN.Layers[0].Output.SizeY;
+  NumberOfClasses := pNN.GetLastLayer().Output.Size;
+  if pOutput.Size <> NumberOfClasses then pOutput.ReSize(pNN.GetLastLayer().Output);
+  pOutput.Fill(0);
+  if LoadImageFromFileIntoVolume(
+      pFilename, vInputImage, InputSizeX, InputSizeY,
+      {EncodeNeuronalInput=}csEncodeRGB) then
+  begin
+    ClassifyImage(pNN, vInputImage, pOutput);
+  end;
+  vInputImage.Free;
+end;
+
+function TNeuralFitWithImageBase.ClassifyImageFromFile(pNN: TNNet;
+  pFilename: string): integer;
+var
+  vOutput: TNNetVolume;
+begin
+  vOutput := TNNetVolume.Create();
+  ClassifyImageFromFile(pNN, pFilename, vOutput);
+  Result := vOutput.GetClass();
+  vOutput.Free;
 end;
 
 procedure TNeuralFitWithImageBase.EnableDefaultImageTreatment();

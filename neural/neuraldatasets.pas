@@ -27,7 +27,7 @@ unit neuraldatasets;
 interface
 
 uses
-  {$IFNDEF FPC}System.Classes,{$ENDIF}
+  {$IFNDEF FPC}System.Classes, Windows, Vcl.Graphics,{$ENDIF}
   neuralvolume, neuralnetwork
   {$IFDEF FPC},
   FPimage, FPReadBMP, FPReadPCX, FPReadJPEG, FPReadPNG,
@@ -115,7 +115,6 @@ const
     'cat'    // used to be truck
   );
 
-{$IFDEF FPC}
 type
 
   { TFileNameList }
@@ -141,6 +140,7 @@ type
       FBaseFolder: string;
       FNewSizeX, FNewSizeY: integer;
       FColorEncoding: integer;
+      {$IFDEF HASTHREADS}FCritSecLoad: TRTLCriticalSection;{$ENDIF}
     public
       constructor Create();
       destructor Destroy(); override;
@@ -180,13 +180,21 @@ type
     FolderName, pImageSubFolder: string;
     TrainingProp, ValidationProp, TestProp: single);
 
+  {$IFDEF FPC}
   procedure LoadImageIntoVolume(M: TFPMemoryImage; Vol:TNNetVolume);
   procedure LoadVolumeIntoImage(Vol:TNNetVolume; M: TFPMemoryImage);
+  function SaveImageFromVolumeIntoFile(V:TNNetVolume; ImageFileName:string):boolean;
+  {$ENDIF}
 
   // Loads an image from a file and stores it into a Volume.
-  function LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume):boolean;
-  function SaveImageFromVolumeIntoFile(V:TNNetVolume; ImageFileName:string):boolean;
-{$ENDIF}
+  function LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume):boolean; overload;
+
+  // Loads an image from a file and stores it into a Volume resizing to
+  // SizeX, SizeY and optionally encoding as neuronal input if has a
+  // color encoding such as csEncodeRGB.
+  function LoadImageFromFileIntoVolume(
+    ImageFileName:string; V:TNNetVolume; SizeX, SizeY: integer;
+    EncodeNeuronalInput: integer = -1):boolean; overload;
 
 // Writes the header of a confusion matrix into a CSV file
 procedure ConfusionWriteCSVHeader(var CSVConfusion: TextFile; Labels: array of string);
@@ -271,15 +279,75 @@ procedure TranslateCifar10VolumesToMachineAnimal(VolumeList: TNNetVolumeList);
 
 {$IFNDEF FPC}
 function SwapEndian(I:integer):integer;
+procedure FindAllDirectories(AList: TStrings; const SearchPath: String;
+  SearchSubDirs: Boolean = true; PathSeparator: char = ';'); overload;
+function DirectorySeparator: string;
 {$ENDIF}
 
 implementation
 
 uses
-  SysUtils, math, neuralthread,
-  {$IFDEF FPC}fileutil{$ELSE} Winapi.Windows{$ENDIF};
+  math, neuralthread,
+  {$IFDEF FPC}SysUtils,fileutil{$ELSE}
+  SysUtils,
+  IOUtils,
+  Types
+  {$ENDIF};
 
-{$IFDEF FPC}
+{$IFNDEF FPC}
+function SwapEndian(I:integer):integer;
+begin
+  // valid for SmallInt
+  // result := Swap(I)
+  Result := ((Swap(Smallint(I)) and $ffff) shl $10) or (Swap(Smallint(I shr $10)) and $ffff)
+end;
+
+procedure FindAllDirectories(AList: TStrings; const SearchPath: String;
+  SearchSubDirs: Boolean = true; PathSeparator: char = ';');
+var
+  dirs: TStringDynArray;
+  dir, Path, SearchPattern: ShortString;
+  SearchOption: TSearchOption;
+begin
+  if SearchSubDirs
+  then SearchOption := TSearchOption.soAllDirectories
+  else SearchOption := TSearchOption.soTopDirectoryOnly;
+  Path := SearchPath;
+  SearchPattern := '*';
+  dirs := TDirectory.GetDirectories(Path, SearchPattern, SearchOption);//, SearchSubDirs);
+  for dir in dirs do
+  begin
+    AList.Add(dir);
+  end;
+end;
+
+procedure FindAllFiles(AList: TStrings; const SearchPath: String;
+  const SearchMask: String = ''; SearchSubDirs: Boolean = True; DirAttr: Word = faDirectory;
+  MaskSeparator: char = ';'; PathSeparator: char = ';');
+var
+  fileNames: TStringDynArray;
+  fileName, Path, SearchPattern: ShortString;
+  SearchOption: TSearchOption;
+begin
+  if SearchSubDirs
+  then SearchOption := TSearchOption.soAllDirectories
+  else SearchOption := TSearchOption.soTopDirectoryOnly;
+  Path := SearchPath;
+  SearchPattern := '*';
+  fileNames := TDirectory.GetFiles(Path, SearchPattern, SearchOption);//, SearchSubDirs);
+  for fileName in fileNames do
+  begin
+    AList.Add(fileName);
+  end;
+end;
+
+
+function DirectorySeparator: string;
+begin
+  Result := TPath.DirectorySeparatorChar;
+end;
+{$ENDIF}
+
 procedure CreateVolumesFromImagesFromFolder(out ImgTrainingVolumes, ImgValidationVolumes,
   ImgTestVolumes: TNNetVolumeList;
   FolderName, pImageSubFolder: string;
@@ -368,10 +436,16 @@ begin
   inherited Create();
   FImageSubFolder := '';
   FBaseFolder := '';
+  {$IFDEF HASTHREADS}
+  NeuralInitCriticalSection(FCritSecLoad);
+  {$ENDIF}
 end;
 
 destructor TClassesAndElements.Destroy();
 begin
+  {$IFDEF HASTHREADS}
+  NeuralDoneCriticalSection(FCritSecLoad);
+  {$ENDIF}
   inherited Destroy();
 end;
 
@@ -384,7 +458,7 @@ begin
   begin
     for ClassId := 0 to Count - 1 do
     begin
-      Result += Self.List[ClassId].Count;
+      Result := Result + Self.List[ClassId].Count;
     end;
   end;
 end;
@@ -409,7 +483,7 @@ begin
         ClassFolder := Self[ClassCnt] + DirectorySeparator;
         if FImageSubFolder <> '' then
         begin
-          ClassFolder += FImageSubFolder + DirectorySeparator;
+          ClassFolder := ClassFolder + FImageSubFolder + DirectorySeparator;
         end;
         if not Assigned(Self.List[ClassCnt]) then
         begin
@@ -447,13 +521,13 @@ begin
         ClassFolder := Self[ClassCnt] + DirectorySeparator;
         if FImageSubFolder <> '' then
         begin
-          ClassFolder += FImageSubFolder + DirectorySeparator;
+          ClassFolder := ClassFolder + FImageSubFolder + DirectorySeparator;
         end;
         if not Assigned(Self.List[ClassCnt]) then
         begin
           WriteLn(ClassFolder,' - error: not assigned list');
         end;
-        FindAllFiles(Self.List[ClassCnt], ClassFolder, '*.png;*.jpg;*.jpeg;*.bmp', {SearchSubDirs} false);
+        FindAllFiles(Self.List[ClassCnt], ClassFolder, '*.png;*.jpg;*.jpeg;*.bmp;*.tif', {SearchSubDirs} false);
         Self.List[ClassCnt].FixObjects();
         ElementCnt := Self.List[ClassCnt].Count;
         SkipFirst := Round(ElementCnt * fSkipFirst);
@@ -628,6 +702,7 @@ begin
   result := Self.List[ClassId].Count;
 end;
 
+{$IFDEF FPC}
 function TFileNameList.ThreadSafeLoadImageFromFileIntoVolume(
   ImageFileName: string; V: TNNetVolume): boolean;
 var
@@ -662,6 +737,114 @@ begin
   M.Free;
 end;
 
+procedure LoadImageIntoVolume(M: TFPMemoryImage; Vol:TNNetVolume);
+var
+  CountX, CountY, MaxX, MaxY: integer;
+  LocalColor: TFPColor;
+  RawPos: integer;
+begin
+  MaxX := M.Width - 1;
+  MaxY := M.Height - 1;
+  Vol.ReSize(MaxX + 1, MaxY + 1, 3);
+
+  for CountX := 0 to MaxX do
+  begin
+    for CountY := 0 to MaxY do
+    begin
+      LocalColor := M.Colors[CountX, CountY];
+      RawPos := Vol.GetRawPos(CountX, CountY, 0);
+
+      Vol.FData[RawPos]     := LocalColor.red shr 8;
+      Vol.FData[RawPos + 1] := LocalColor.green shr 8;
+      Vol.FData[RawPos + 2] := LocalColor.blue shr 8;
+    end;
+  end;
+end;
+
+procedure LoadVolumeIntoImage(Vol: TNNetVolume; M: TFPMemoryImage);
+var
+  CountX, CountY, MaxX, MaxY: integer;
+  LocalColor: TFPColor;
+  RawPos: integer;
+begin
+  MaxX := Vol.SizeX - 1;
+  MaxY := Vol.SizeY - 1;
+  M.SetSize(Vol.SizeX, Vol.SizeY);
+  for CountX := 0 to MaxX do
+  begin
+    for CountY := 0 to MaxY do
+    begin
+      RawPos := Vol.GetRawPos(CountX, CountY, 0);
+      LocalColor.red := NeuronForceMinMax(Round(Vol.FData[RawPos]),0,255) shl 8;
+      LocalColor.green := NeuronForceMinMax(Round(Vol.FData[RawPos + 1]),0,255) shl 8;
+      LocalColor.blue := NeuronForceMinMax(Round(Vol.FData[RawPos + 2]),0, 255) shl 8;
+      M.Colors[CountX, CountY] := LocalColor;
+    end;
+  end;
+end;
+{$ELSE}
+procedure LoadPictureIntoVolume(Picture: TPicture; Vol:TNNetVolume);
+var
+  CountX, CountY, MaxX, MaxY: integer;
+  LocalColor: TColor;
+  RawPos: integer;
+begin
+  MaxX := Picture.Width - 1;
+  MaxY := Picture.Height - 1;
+  Vol.ReSize(MaxX + 1, MaxY + 1, 3);
+
+  for CountX := 0 to MaxX do
+  begin
+    for CountY := 0 to MaxY do
+    begin
+      LocalColor := Picture.Bitmap.Canvas.Pixels[CountX, CountY];
+      RawPos := Vol.GetRawPos(CountX, CountY, 0);
+
+      Vol.FData[RawPos]     := LocalColor and 255;
+      Vol.FData[RawPos + 1] := (LocalColor shr 8) and 255;
+      Vol.FData[RawPos + 2] := (LocalColor shr 16) and 255;
+    end;
+  end;
+end;
+
+function TFileNameList.ThreadSafeLoadImageFromFileIntoVolume(
+  ImageFileName: string; V: TNNetVolume): boolean;
+var
+  LocalPicture: TPicture;
+begin
+  LocalPicture := TPicture.Create;
+  {$IFDEF HASTHREADS}EnterCriticalSection(FCritSecLoad);{$ENDIF}
+  LocalPicture.LoadFromFile( ImageFileName );
+  {$IFDEF HASTHREADS}LeaveCriticalSection(FCritSecLoad);{$ENDIF}
+  LoadPictureIntoVolume(LocalPicture, V);
+  LocalPicture.Free;
+end;
+
+function LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume):boolean;
+var
+  LocalPicture: TPicture;
+begin
+  LocalPicture := TPicture.Create;
+  LocalPicture.LoadFromFile( ImageFileName );
+  LoadPictureIntoVolume(LocalPicture, V);
+  LocalPicture.Free;
+  Result := true;
+end;
+
+(*
+function SaveImageFromVolumeIntoFile(V: TNNetVolume; ImageFileName: string
+  ): boolean;
+var
+  LocalPicture: TPicture;
+begin
+  LocalPicture := TPicture.Create;
+  LoadVolumeIntoImage(V, M);
+  Result := M.SaveToFile(ImageFileName);
+  LocalPicture.Free;
+end;
+*)
+{$ENDIF}
+
 procedure TClassesAndElements.LoadImages_NTL(index, threadnum: integer);
 var
   SourceVolume: TNNetVolume;
@@ -694,13 +877,21 @@ begin
           begin
             SourceVolume := Self.List[ClassId].List[ImageId];
             // Debug: WriteLn('Loading: ', Self.GetFileName(ClassId, ImageId));
+            try
             {$IFDEF FPC}
-            M.LoadFromFile( Self.GetFileName(ClassId, ImageId) );
-            LoadImageIntoVolume(M, SourceVolume);
+              {$IFDEF HASTHREADS}EnterCriticalSection(FCritSecLoad);{$ENDIF}
+              M.LoadFromFile( Self.GetFileName(ClassId, ImageId) );
+              {$IFDEF HASTHREADS}LeaveCriticalSection(FCritSecLoad);{$ENDIF}
+              LoadImageIntoVolume(M, SourceVolume);
             {$ELSE}
-            LocalPicture.LoadFromFile( Self.GetFileName(ClassId, ImageId) );
-            LoadPictureIntoVolume(LocalPicture, SourceVolume);
+              LocalPicture.LoadFromFile( Self.GetFileName(ClassId, ImageId) );
+              LoadPictureIntoVolume(LocalPicture, SourceVolume);
             {$ENDIF}
+            except
+              WriteLn('Failed loading image: ',Self.GetFileName(ClassId, ImageId));
+              SourceVolume.ReSize(FNewSizeX, FNewSizeY, 3);
+              {$IFDEF HASTHREADS}LeaveCriticalSection(FCritSecLoad);{$ENDIF}
+            end;
             if (FNewSizeX > 0) and (FNewSizeY > 0) then
             begin
               if (SourceVolume.SizeX <> FNewSizeX) or (SourceVolume.SizeY <> FNewSizeY) then
@@ -763,63 +954,6 @@ begin
 
   ClassesAndElements.Free;
 end;
-
-procedure LoadImageIntoVolume(M: TFPMemoryImage; Vol:TNNetVolume);
-var
-  CountX, CountY, MaxX, MaxY: integer;
-  LocalColor: TFPColor;
-  RawPos: integer;
-begin
-  MaxX := M.Width - 1;
-  MaxY := M.Height - 1;
-  Vol.ReSize(MaxX + 1, MaxY + 1, 3);
-
-  for CountX := 0 to MaxX do
-  begin
-    for CountY := 0 to MaxY do
-    begin
-      LocalColor := M.Colors[CountX, CountY];
-      RawPos := Vol.GetRawPos(CountX, CountY, 0);
-
-      Vol.FData[RawPos]     := LocalColor.red shr 8;
-      Vol.FData[RawPos + 1] := LocalColor.green shr 8;
-      Vol.FData[RawPos + 2] := LocalColor.blue shr 8;
-    end;
-  end;
-end;
-
-procedure LoadVolumeIntoImage(Vol: TNNetVolume; M: TFPMemoryImage);
-var
-  CountX, CountY, MaxX, MaxY: integer;
-  LocalColor: TFPColor;
-  RawPos: integer;
-begin
-  MaxX := Vol.SizeX - 1;
-  MaxY := Vol.SizeY - 1;
-  M.SetSize(Vol.SizeX, Vol.SizeY);
-  for CountX := 0 to MaxX do
-  begin
-    for CountY := 0 to MaxY do
-    begin
-      RawPos := Vol.GetRawPos(CountX, CountY, 0);
-      LocalColor.red := NeuronForceMinMax(Round(Vol.FData[RawPos]),0,255) shl 8;
-      LocalColor.green := NeuronForceMinMax(Round(Vol.FData[RawPos + 1]),0,255) shl 8;
-      LocalColor.blue := NeuronForceMinMax(Round(Vol.FData[RawPos + 2]),0, 255) shl 8;
-      M.Colors[CountX, CountY] := LocalColor;
-    end;
-  end;
-end;
-
-{$ENDIF}
-
-{$IFNDEF FPC}
-function SwapEndian(I:integer):integer;
-begin
-  // valid for SmallInt
-  // result := Swap(I)
-  Result := ((Swap(Smallint(I)) and $ffff) shl $10) or (Swap(Smallint(I shr $10)) and $ffff)
-end;
-{$ENDIF}
 
 procedure TranslateCifar10VolumesToMachineAnimal(VolumeList: TNNetVolumeList);
 var
@@ -1181,6 +1315,34 @@ begin
     WriteLn('File Not Fount:', FullFileName);
     WriteLn('Please download from ', Link);
     //TODO: automatically download file
+    Result := false;
+  end;
+end;
+
+function LoadImageFromFileIntoVolume(ImageFileName:string; V:TNNetVolume;
+  SizeX, SizeY: integer;
+  EncodeNeuronalInput: integer = -1
+  ): boolean;
+var
+  VAux: TNNetVolume;
+begin
+  if LoadImageFromFileIntoVolume(ImageFileName, V) then
+  begin
+    if (V.SizeX<>SizeX) or (V.SizeY<>SizeY) then
+    begin
+      VAux := TNNetVolume.Create;
+      VAux.Copy(V);
+      V.CopyResizing(VAux, SizeX, SizeY);
+      VAux.Free;
+    end;
+    if (EncodeNeuronalInput >= 0) then
+    begin
+      V.RgbImgToNeuronalInput( (EncodeNeuronalInput) and 255 );
+    end;
+    Result := true;
+  end
+  else
+  begin
     Result := false;
   end;
 end;
