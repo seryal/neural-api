@@ -150,6 +150,8 @@ type
     procedure AddAtDepth(pDepth: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure AddAtDepth(pDepth: integer; Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure AddFromDepthToDepth(Original: TVolume; FromDepth, ToDepth: integer); {$IFDEF Release} inline; {$ENDIF}
+    procedure AddTransposingXD(Original: TVolume); {$IFDEF Release} inline; {$ENDIF}
+    procedure AddTransposingYD(Original: TVolume); {$IFDEF Release} inline; {$ENDIF}
     procedure CopyFromDepthToDepth(Original: TVolume; FromDepth, ToDepth: integer); {$IFDEF Release} inline; {$ENDIF}
     procedure AddLayers(A,B: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Sub(x, y, d: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -196,10 +198,16 @@ type
     procedure Copy(var Original: array of T); overload;
     procedure Copy(var Original: array of byte); overload;
     procedure Copy(Original: TBits; pFlase: T = -0.5; pTrue: T = +0.5); overload;
-    procedure CopyPadding(Original: TVolume; Padding: integer); {$IFDEF Release} inline; {$ENDIF}
+    procedure CopyPadding(Original: TVolume; Padding: integer); {$IFDEF Release} inline; {$ENDIF} overload;
+    procedure CopyPadding(Original: TVolume; PaddingX, PaddingY: integer); {$IFDEF Release} inline; {$ENDIF} overload;
     procedure CopyCropping(Original: TVolume; StartX, StartY, pSizeX, pSizeY: integer);
     procedure CopyResizing(Original: TVolume; NewSizeX, NewSizeY: integer);
+    procedure CopyTransposingXD(Original: TVolume);
+    procedure CopyTransposingYD(Original: TVolume);
     procedure CopyNoChecks(Original: TVolume); {$IFDEF Release} inline; {$ENDIF}
+    procedure CopyNoChecks(var Original: array of byte); overload;
+    procedure CopyNoChecks(var Original: string); overload;
+    procedure CopyReversedNoChecks(var Original: string); overload;
     procedure CopyChannels(Original: TVolume; aChannels: array of integer);
     procedure Define(Original: array of T);
     function DotProduct(Original: TVolume): T; overload; {$IFDEF Release} inline; {$ENDIF}
@@ -232,6 +240,8 @@ type
     function GetSmallestIdxInRange(StartPos, Len: integer): integer;
     function GetStdDeviation(): T; {$IFDEF Release} inline; {$ENDIF}
     function GetMagnitude(): T; {$IFDEF Release} inline; {$ENDIF}
+    function GetEntropy(): T;
+    function GetPerplexity(): T;
     procedure FlipX();
     procedure FlipY();
     procedure IncTag(); {$IFDEF Release} inline; {$ENDIF}
@@ -272,17 +282,25 @@ type
     procedure LoadFromString(strData: string);
 
     // bit operations
-    procedure CopyAsBits(var Original: array of byte; pFlase: T = -0.5; pTrue: T = +0.5); overload;
+    procedure CopyAsBits(var Original: array of byte; pFalse: T = -0.5; pTrue: T = +0.5; CanResize: boolean = True); overload;
+    procedure CopyAsBits(Original: string; pFalse: T = -0.5; pTrue: T = +0.5; CanResize: boolean = True);
+    procedure CopyAsBitsReversed(Original: string; pFalse: T = -0.5; pTrue: T = +0.5);
     procedure ReadAsBits(var Dest: array of byte; Threshold: T = 0.0);
 
-    // Classification Functions
+    // Classification Functions (SetClass is similar to One Hot Encoding)
     procedure SetClass(pClass: integer; value: T); {$IFNDEF FPC} overload; {$ENDIF}
     procedure SetClass(pClass: integer; TrueValue, FalseValue: T); {$IFNDEF FPC} overload; {$ENDIF}
     procedure SetClassForHiperbolicTangent(pClass: integer);
     procedure SetClassForReLU(pClass: integer);
     procedure SetClassForSoftMax(pClass: integer);
+    // GetClass is similar to argmax
     function GetClass(): integer;
     function SoftMax(): T;
+
+    // Encoding Functions
+    procedure OneHotEncoding(aTokens: array of integer); overload;
+    procedure OneHotEncoding(aTokens: string); overload;
+    procedure OneHotEncodingReversed(aTokens: string); overload;
 
     // Color Encoding Functions
     procedure RgbToHsv(); {$IFDEF Release} inline; {$ENDIF}
@@ -310,6 +328,13 @@ type
     property Depth: integer read FDepth;
   end;
 
+  TNNetToken = record
+    Token: Integer;
+    Score: TNeuralFloat;
+  end;
+
+  TNNetTokenArray = array of TNNetToken;
+
   { TNNetVolume }
   {$IFDEF FPC}
   TNNetVolume = class (specialize TVolume<TNeuralFloat>)
@@ -323,6 +348,7 @@ type
       function GetMemSize(): integer; {$IFDEF Release} inline; {$ENDIF}
       procedure CalculateLocalResponseFrom2D(Original: TNNetVolume; pSize:integer; alpha, beta: TNeuralFloat );
       procedure CalculateLocalResponseFromDepth(Original: TNNetVolume; pSize:integer; alpha, beta: TNeuralFloat );
+      procedure GetTokenArray(var TokenArray: TNNetTokenArray);
       procedure InterleavedDotProduct(InterleavedAs, B:TNNetVolume);  overload;
       procedure InterleavedDotProduct(InterleavedAs, Bs:TNNetVolume; VectorSize: integer); overload;
       procedure DotProducts(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume);
@@ -364,7 +390,8 @@ type
       procedure Divi(Value: Single); overload; {$IFDEF Release} inline; {$ENDIF}
       procedure Copy(Original: TNNetVolume); overload; {$IFDEF Release} inline; {$ENDIF}
       procedure CopyRelu(Original: TNNetVolume); overload; {$IFDEF Release} inline; {$ENDIF}
-      procedure CopyPadding(Original: TNNetVolume; Padding: integer);
+      procedure CopyPadding(Original: TNNetVolume; Padding: integer); overload;
+      procedure CopyPadding(Original: TNNetVolume; PaddingX, PaddingY: integer); {$IFDEF Release} inline; {$ENDIF} overload;
       procedure CopyNoChecks(Original: TNNetVolume);
       function GetSum(): TNeuralFloat; override;
       function GetSumSqr(): TNeuralFloat; override;
@@ -375,6 +402,42 @@ type
     property
       DataPtr: TNeuralFloatArrPtr read FDataPtr;
   end;
+
+  { TNNetSamplerBase }
+
+  TNNetSamplerBase = class(TObject)
+    protected
+      FTokenArr: TNNetTokenArray;
+    public
+      function GetToken(Origin: TNNetVolume): integer; virtual; abstract;
+      procedure SortTokenArray();
+      destructor Destroy(); override;
+  end;
+
+  { TNNetSamplerGreedy }
+  TNNetSamplerGreedy = class (TNNetSamplerBase)
+    public
+      function GetToken(Origin: TNNetVolume): integer; override;
+  end;
+
+  { TNNetSamplerTopK }
+  TNNetSamplerTopK = class (TNNetSamplerBase)
+    protected
+      FTopK: integer;
+    public
+      constructor Create(TopK: integer);
+      function GetToken(Origin: TNNetVolume): integer; override;
+  end;
+
+  { TNNetSamplerTopP }
+  TNNetSamplerTopP = class (TNNetSamplerBase)
+    protected
+      FTopP: TNeuralFloat;
+    public
+      constructor Create(TopP: TNeuralFloat);
+      function GetToken(Origin: TNNetVolume): integer; override;
+  end;
+
 
   /// Implements a pair of volumes
   TNNetVolumePair = class(TObject)
@@ -501,6 +564,9 @@ type
       procedure KeepLast(Cnt: integer);
       procedure DeleteFirst(Cnt: integer);
       procedure DeleteLast(Cnt: integer);
+      procedure SetCapacity(NewCapacity: Integer); override;
+      function GetDelimitedTextFast: string;
+      procedure LoadLargeFile(Filename: string);
   end;
 
   { TStringListInt }
@@ -628,8 +694,8 @@ type
       procedure LoadDictionaryFromFile(Filename: string; Separator:char = ',');
   end;
 
-  function CreateTokenizedStringList(str: string; c:char):TStringList; overload;
-  function CreateTokenizedStringList(c:char):TStringList; overload;
+  function CreateTokenizedStringList(str: string; c:char):TNNetStringList; overload;
+  function CreateTokenizedStringList(c:char):TNNetStringList; overload;
 
   function HiperbolicTangent(x: TNeuralFloat): TNeuralFloat;
   function HiperbolicTangentDerivative(x: TNeuralFloat): TNeuralFloat;
@@ -685,6 +751,8 @@ type
   function NeuralFloatToStr(V: TNeuralFloat): string;
   function NeuralStrToFloat(V: String): TNeuralFloat;
 
+  function GetLastChars(const InputStr: string; LenStr: Integer): string;
+
   procedure TestTNNetVolume();
   procedure TestKMeans();
 
@@ -693,15 +761,15 @@ implementation
 uses
   Math, neuralbit, strutils;
 
-function CreateTokenizedStringList(str: string; c:char):TStringList;
+function CreateTokenizedStringList(str: string; c:char):TNNetStringList;
 begin
   Result := CreateTokenizedStringList(c);
   Result.DelimitedText := str;
 end;
 
-function CreateTokenizedStringList(c: char): TStringList;
+function CreateTokenizedStringList(c: char): TNNetStringList;
 begin
-  Result := TStringList.Create;
+  Result := TNNetStringList.Create;
   Result.Sorted := false;
   Result.Delimiter := c;
   Result.StrictDelimiter := true;
@@ -1638,6 +1706,99 @@ begin
   end;
 end;
 
+procedure QuickSortTokenArray(var A: TNNetTokenArray; iLo, iHi: Integer);
+var
+  Lo, Hi: Integer;
+  Mid, T: TNNetToken;
+begin
+  Lo := iLo;
+  Hi := iHi;
+  Mid := A[(Lo + Hi) div 2];
+  repeat
+    while A[Lo].Score > Mid.Score do Inc(Lo);
+    while A[Hi].Score < Mid.Score do Dec(Hi);
+    if Lo <= Hi then
+    begin
+      T := A[Lo];
+      A[Lo] := A[Hi];
+      A[Hi] := T;
+      Inc(Lo);
+      Dec(Hi);
+    end;
+  until Lo > Hi;
+  if Hi > iLo then QuickSortTokenArray(A, iLo, Hi);
+  if Lo < iHi then QuickSortTokenArray(A, Lo, iHi);
+end;
+
+{ TNNetSamplerTopP }
+
+constructor TNNetSamplerTopP.Create(TopP: TNeuralFloat);
+begin
+  inherited Create();
+  FTopP := TopP;
+end;
+
+function TNNetSamplerTopP.GetToken(Origin: TNNetVolume): integer;
+var
+  CumulativeSum: TNeuralFloat;
+  I, Threshold: Integer;
+begin
+  Origin.GetTokenArray(FTokenArr);
+  SortTokenArray();
+  CumulativeSum := 0;
+  Threshold := 0;
+  for I := Low(FTokenArr) to High(FTokenArr) do
+  begin
+    CumulativeSum := CumulativeSum + FTokenArr[i].Score;
+    if CumulativeSum > FTopP then
+    begin
+      Threshold := I;
+      Break;
+    end;
+  end;
+
+  // Randomly select one of the top tokens within the threshold.
+  if Threshold > 0 then
+    Result := FTokenArr[Random(Threshold)].Token
+  else
+    Result := FTokenArr[0].Token; // Fallback in case P is too low.
+end;
+
+{ TNNetSamplerTopK }
+
+constructor TNNetSamplerTopK.Create(TopK: integer);
+begin
+  inherited Create();
+  FTopK := TopK;
+end;
+
+function TNNetSamplerTopK.GetToken(Origin: TNNetVolume): integer;
+begin
+  Origin.GetTokenArray(FTokenArr);
+  SortTokenArray();
+  Result := FTokenArr[Random(FTopK)].Token;
+end;
+
+{ TNNetSamplerBase }
+
+procedure TNNetSamplerBase.SortTokenArray;
+begin
+  QuickSortTokenArray(FTokenArr, Low(FTokenArr), High(FTokenArr));
+end;
+
+destructor TNNetSamplerBase.Destroy;
+begin
+  SetLength(FTokenArr, 0);
+  inherited Destroy;
+end;
+
+{ TNNetSamplerGreedy }
+
+function TNNetSamplerGreedy.GetToken(Origin: TNNetVolume): integer;
+begin
+  Result := Origin.GetClass();
+end;
+
 { TStringStringList }
 
 procedure TStringStringList.LoadFromCsv(filename: string;
@@ -1799,6 +1960,82 @@ begin
   begin
     for I := 1 to Cnt do Delete(Count-1);
   end;
+end;
+
+procedure TNNetStringList.SetCapacity(NewCapacity: Integer);
+begin
+  inherited SetCapacity(NewCapacity);
+end;
+
+/// Helper function to check if a string contains any character from a set
+// This function was coded by chatGPT4.
+function StrHasChars(const Str: string; Strict: Boolean; const Chars: TSysCharSet): Boolean;
+var
+  P: PChar;
+begin
+  P := PChar(Str);
+  while (P^ <> #0) and (not CharInSet(P^, Chars) or Strict) do Inc(P);
+  Result := P^ <> #0;
+end;
+
+// This function was coded by chatGPT4.
+function TNNetStringList.GetDelimitedTextFast: string;
+var
+  I: Integer;
+  S: String;
+  BreakChars: set of Char;
+  DoQuote: Boolean;
+  StringBuilder: TAnsiStringBuilder;
+begin
+  CheckSpecialChars;
+  if StrictDelimiter then
+    BreakChars := [#0, QuoteChar, Delimiter]
+  else
+    BreakChars := [#0..' ', QuoteChar, Delimiter];
+
+  StringBuilder := TAnsiStringBuilder.Create();
+  try
+    for I := 0 to Count - 1 do
+    begin
+      S := Strings[I];
+      DoQuote := AlwaysQuote;
+      if not DoQuote then
+      begin
+        // Quote strings that include BreakChars
+        DoQuote := StrHasChars(S, True, BreakChars);
+      end;
+      if DoQuote and (QuoteChar <> #0) then
+        StringBuilder.Append(AnsiQuotedStr(S, QuoteChar))
+      else
+        StringBuilder.Append(S);
+
+      if I < Count - 1 then
+        StringBuilder.Append(Delimiter);
+    end;
+
+    // Quote empty string
+    if (StringBuilder.Length = 0) and (Count = 1) and (QuoteChar <> #0) then
+      StringBuilder.Append(QuoteChar).Append(QuoteChar);
+
+    Result := StringBuilder.ToString;
+  finally
+    StringBuilder.Free;
+  end;
+end;
+
+procedure TNNetStringList.LoadLargeFile(Filename: string);
+var
+  LargeFile: TextFile;
+  StrLine: string;
+begin
+  AssignFile(LargeFile, Filename);
+  Reset(LargeFile);
+  while not Eof(LargeFile) do
+  begin
+    ReadLn(LargeFile, StrLine);
+    Self.Add(StrLine);
+  end;
+  CloseFile(LargeFile);
 end;
 
 {$IFDEF FPC}
@@ -3138,6 +3375,74 @@ begin
   end;
 end;
 
+procedure TVolume.AddTransposingXD(Original: TVolume);
+var
+  CntX, CntY, CntD: integer;
+  MaxX, MaxY, MaxD: integer;
+begin
+  ReSize(Original.Depth, Original.SizeY, Original.SizeX);
+  MaxX := FSizeX - 1;
+  MaxY := FSizeY - 1;
+  MaxD := FDepth - 1;
+  if MaxY > 0 then
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntY := 0 to MaxY do
+      begin
+        for CntD := 0 to MaxD do
+        begin
+          Add(CntX, CntY, CntD, Original[CntD, CntY, CntX]);
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntD := 0 to MaxD do
+      begin
+          Add(CntX, 0, CntD, Original[CntD, 0, CntX]);
+      end;
+    end;
+  end;
+end;
+
+procedure TVolume.AddTransposingYD(Original: TVolume);
+var
+  CntX, CntY, CntD: integer;
+  MaxX, MaxY, MaxD: integer;
+begin
+  ReSize(Original.SizeX, Original.Depth, Original.SizeY);
+  MaxX := FSizeX - 1;
+  MaxY := FSizeY - 1;
+  MaxD := FDepth - 1;
+  if MaxX > 0 then
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntY := 0 to MaxY do
+      begin
+        for CntD := 0 to MaxD do
+        begin
+          Add(CntX, CntY, CntD, Original[CntX, CntD, CntY]);
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    for CntY := 0 to MaxY do
+    begin
+      for CntD := 0 to MaxD do
+      begin
+        Add(0, CntY, CntD, Original[0, CntD, CntY]);
+      end;
+    end;
+  end;
+end;
+
 procedure TVolume.CopyFromDepthToDepth(Original: TVolume; FromDepth,
   ToDepth: integer);
 var
@@ -3970,6 +4275,52 @@ begin
   Move(Original.FData[0], Self.FData[0], Self.Size * SizeOf(T));
 end;
 
+procedure TVolume.CopyNoChecks(var Original: array of byte);
+var
+  I: integer;
+  vHigh: integer;
+begin
+  if Length(Original) > 0 then
+  begin
+    vHigh := High(Original);
+
+    for I := 0 to vHigh do
+    begin
+      FData[I] := Original[I];
+    end;
+  end;
+end;
+
+procedure TVolume.CopyNoChecks(var Original: string);
+var
+  I: integer;
+  LenOriginal: integer;
+begin
+  LenOriginal := Length(Original);
+  if LenOriginal > 0 then
+  begin
+    for I := 1 to LenOriginal do
+    begin
+      FData[I-1] := Ord(Original[I]);
+    end;
+  end;
+end;
+
+procedure TVolume.CopyReversedNoChecks(var Original: string);
+var
+  I: integer;
+  LenOriginal: integer;
+begin
+  LenOriginal := Length(Original);
+  if LenOriginal > 0 then
+  begin
+    for I := 1 to LenOriginal do
+    begin
+      FData[I-1] := Ord(Original[LenOriginal - I + 1]);
+    end;
+  end;
+end;
+
 procedure TVolume.CopyChannels(Original: TVolume; aChannels: array of integer);
 var
   MaxX, MaxY: integer;
@@ -4083,27 +4434,70 @@ begin
   end;
 end;
 
-procedure TVolume.CopyAsBits(var Original: array of byte; pFlase: T = -0.5; pTrue: T = +0.5);
+procedure TVolume.CopyAsBits(var Original: array of byte; pFalse: T = -0.5; pTrue: T = +0.5; CanResize:boolean = True);
 var
   I: integer;
   vHigh: integer;
+  LenOriginal: integer;
   aTranslate: array [0..1] of T;
 begin
-  if Length(Original) > 0 then
+  LenOriginal := Length(Original);
+  if LenOriginal > 0 then
   begin
-    if (Length(Original)*8 <> Self.Size) then
+    if CanResize and (LenOriginal*8 <> Self.Size) then
     begin
-      Self.ReSize(Length(Original), 1, 8);
+      Self.ReSize(LenOriginal, 1, 8);
     end;
 
-    vHigh := Length(Original) * 8 - 1;
-    aTranslate[0] := pFlase;
+    vHigh := LenOriginal * 8 - 1;
+    aTranslate[0] := pFalse;
     aTranslate[1] := pTrue;
 
     for I := 0 to vHigh do
     begin
       FData[I] := aTranslate[BARead(Original,I)];
     end;
+  end;
+end;
+
+procedure TVolume.CopyAsBits(Original: string; pFalse: T; pTrue: T; CanResize:boolean);
+var
+  AB: array of byte;
+  I: integer;
+  vHigh: integer;
+  LenOriginal: integer;
+begin
+  LenOriginal := Length(Original);
+  if LenOriginal > 0 then
+  begin
+    SetLength(AB, LenOriginal);
+    vHigh := LenOriginal;
+    for I := 1 to vHigh do
+    begin
+      AB[I-1] := Min(Ord(Original[I]), 255);
+    end;
+    Self.CopyAsBits(AB, pFalse, pTrue, CanResize);
+  end;
+end;
+
+procedure TVolume.CopyAsBitsReversed(Original: string; pFalse: T; pTrue: T);
+var
+  AB: array of byte;
+  I: integer;
+  vHigh: integer;
+  LenOriginal: integer;
+begin
+  LenOriginal := Length(Original);
+  if LenOriginal > 0 then
+  begin
+    SetLength(AB, LenOriginal);
+    vHigh := LenOriginal;
+    for I := 1 to vHigh do
+    begin
+      AB[I-1] := Min(Ord(Original[vHigh-I+1]), 255);
+    end;
+    Self.CopyAsBits(AB, pFalse, pTrue, False);
+    SetLength(AB, 0);
   end;
 end;
 
@@ -4157,6 +4551,30 @@ begin
   begin
     SourceRawPos := Original.GetRawPos(0, CntY, 0);
     DestRawPos := GetRawPos(Padding, CntY + Padding, 0);
+    Move(Original.FData[SourceRawPos], Self.FData[DestRawPos], RowSize);
+  end;
+end;
+
+procedure TVolume.CopyPadding(Original: TVolume; PaddingX, PaddingY: integer);
+var
+  CntY: integer;
+  NewSizeX, NewSizeY: integer;
+  MaxY: integer;
+  RowSize: integer;
+  SourceRawPos, DestRawPos: integer;
+begin
+  NewSizeX := Original.SizeX + PaddingX * 2;
+  NewSizeY := Original.SizeY + PaddingY * 2;
+  MaxY := Original.SizeY - 1;
+  RowSize := Original.SizeX * Original.Depth * SizeOf(TNeuralFloat);
+
+  Resize(NewSizeX, NewSizeY, Original.Depth);
+  Fill(0);
+
+  for CntY := 0 to MaxY do
+  begin
+    SourceRawPos := Original.GetRawPos(0, CntY, 0);
+    DestRawPos := GetRawPos(PaddingX, CntY + PaddingY, 0);
     Move(Original.FData[SourceRawPos], Self.FData[DestRawPos], RowSize);
   end;
 end;
@@ -4216,6 +4634,74 @@ begin
         RawPostDest := GetRawPos(CntX, CntY);
         RawPosSource := Original.GetRawPos(OrigPosX, OrigPosY);
         Move(Original.FData[RawPosSource], FData[RawPostDest], MoveSizeBytes);
+      end;
+    end;
+  end;
+end;
+
+procedure TVolume.CopyTransposingXD(Original: TVolume);
+var
+  CntX, CntY, CntD: integer;
+  MaxX, MaxY, MaxD: integer;
+begin
+  ReSize(Original.Depth, Original.SizeY, Original.SizeX);
+  MaxX := FSizeX - 1;
+  MaxY := FSizeY - 1;
+  MaxD := FDepth - 1;
+  if MaxY > 0 then
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntY := 0 to MaxY do
+      begin
+        for CntD := 0 to MaxD do
+        begin
+          Self[CntX, CntY, CntD] := Original[CntD, CntY, CntX];
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntD := 0 to MaxD do
+      begin
+        Self[CntX, 0, CntD] := Original[CntD, 0, CntX];
+      end;
+    end;
+  end;
+end;
+
+procedure TVolume.CopyTransposingYD(Original: TVolume);
+var
+  CntX, CntY, CntD: integer;
+  MaxX, MaxY, MaxD: integer;
+begin
+  ReSize(Original.SizeX, Original.Depth, Original.SizeY);
+  MaxX := FSizeX - 1;
+  MaxY := FSizeY - 1;
+  MaxD := FDepth - 1;
+  if MaxX > 0 then
+  begin
+    for CntX := 0 to MaxX do
+    begin
+      for CntY := 0 to MaxY do
+      begin
+        for CntD := 0 to MaxD do
+        begin
+          Self[CntX, CntY, CntD] := Original[CntX, CntD, CntY];
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    for CntY := 0 to MaxY do
+    begin
+      for CntD := 0 to MaxD do
+      begin
+        Self[0, CntY, CntD] := Original[0, CntD, CntY];
       end;
     end;
   end;
@@ -4674,6 +5160,29 @@ begin
   Result := Sqrt( Aux );
 end;
 
+function TVolume.GetEntropy: T;
+var
+  I, vHigh: integer;
+  vSum: TNeuralFloat;
+begin
+  vSum := 0;
+  if FSize > 0 then
+  begin
+    vHigh := FSize - 1;
+    for I := 0 to vHigh do
+    begin
+      if FData[I] > 0 then // To avoid log(0) which is undefined
+        vSum := vSum + (FData[i] * log2(FData[i]));
+    end;
+  end;
+  Result := -vSum;
+end;
+
+function TVolume.GetPerplexity: T;
+begin
+  Result := Power(2, GetEntropy());
+end;
+
 procedure TVolume.FlipX();
 var
   iFrom, iTo: integer;
@@ -5043,6 +5552,116 @@ begin
   end;
 
   Result := TotalSum;
+end;
+
+procedure TVolume.OneHotEncoding(aTokens: array of integer);
+var
+  CntToken, MaxToken, Token: integer;
+begin
+  MaxToken := Length(aTokens) - 1;
+  Self.Fill(0);
+  if MaxToken < SizeX then
+  begin
+    for CntToken := 0 to MaxToken do
+    begin
+      Token := aTokens[CntToken];
+      if Token < FDepth then
+      begin
+        Self[CntToken, 0, Token] := 1;
+      end
+      else
+      begin
+        WriteLn('Token '+IntToStr(Token)+' is bigger than Depth '+IntToStr(FDepth)+' at OneHotEncoding.');
+      end;
+    end;
+  end
+  else
+  begin
+    WriteLn('Token length '+IntToStr(MaxToken + 1)+' is bigger than Size X '+IntToStr(SizeX)+' at OneHotEncoding.');
+  end;
+end;
+
+procedure TVolume.OneHotEncoding(aTokens: string);
+var
+  CntToken, MaxToken, Token: integer;
+begin
+  MaxToken := Length(aTokens);
+  Self.Fill(0);
+  if MaxToken <= SizeX then
+  begin
+    for CntToken := 1 to MaxToken do
+    begin
+      Token := Ord(aTokens[CntToken]);
+      if Token < FDepth then
+      begin
+        Self[CntToken-1, 0, Token] := 1;
+      end
+    end;
+  end
+  else
+  begin
+    WriteLn('Token length '+IntToStr(MaxToken + 1)+' is bigger than Size X '+IntToStr(SizeX)+' at OneHotEncodingReversed.');
+  end;
+end;
+
+function GetLastChars(const InputStr: string; LenStr: Integer): string;
+begin
+  if Length(InputStr) > LenStr then
+    Result := Copy(InputStr, Length(InputStr) - LenStr + 1, LenStr)
+  else
+    Result := InputStr;
+end;
+
+procedure TVolume.OneHotEncodingReversed(aTokens: string);
+var
+  CntToken, MaxToken, Token: integer;
+  LocalTokens: string;
+begin
+  MaxToken := Length(aTokens);
+  if MaxToken > SizeX then
+  begin
+    LocalTokens := GetLastChars(aTokens, SizeX);
+    MaxToken := Length(aTokens);
+  end
+  else
+  begin
+    LocalTokens := aTokens;
+  end;
+  Self.Fill(0);
+  if MaxToken > 0 then
+  begin
+    {$IFDEF DEBUG}
+    if Ord(LocalTokens[MaxToken]) < 2 then
+    begin
+      WriteLn('A string for prediction should not end with terminal symbol.');
+    end;
+    if Ord(LocalTokens[1]) < 2 then
+    begin
+      WriteLn('A string for prediction should not start with terminal symbol.');
+    end;
+    {$ENDIF}
+    if MaxToken <= SizeX then
+    begin
+      for CntToken := 1 to MaxToken do
+      begin
+        Token := Ord(LocalTokens[CntToken]);
+        if Token < FDepth then
+        begin
+          Self[MaxToken-CntToken, 0, Token] := 1;
+        end;
+      end;
+    end
+    else
+    begin
+      WriteLn('This should never happend. Token length '+IntToStr(MaxToken)+' is bigger than Size X '+IntToStr(SizeX)+' at OneHotEncodingReversed.');
+    end;
+  end
+  else
+  begin
+    {$IFDEF DEBUG}
+    WriteLn('Zero len at OneHotEncodingReversed');
+    {$ENDIF}
+  end;
 end;
 
 procedure TVolume.RgbToHsv();
@@ -5456,17 +6075,14 @@ end;
 
 function TVolume.SaveToString(): string;
 var
-  S: TStringList;
+  S: TNNetStringList;
   I: integer;
   version: integer;
   AuxFloat: Single;
 begin
   version := 1;
-  S := TStringList.Create;
-  S.Sorted := false;
-  S.Delimiter := ';';
-  S.StrictDelimiter := true;
-
+  S := CreateTokenizedStringList(';');
+  S.SetCapacity(FSize+10);
   S.Add( IntToStr(version) );
   S.Add( IntToStr(FSizeX) );
   S.Add( IntToStr(FSizeY) );
@@ -5478,7 +6094,8 @@ begin
     S.Add( FloatToStr(AuxFloat, FFormatSettings) );
   end;
 
-  Result := S.DelimitedText;
+  Result := S.GetDelimitedTextFast();
+  //Result := S.DelimitedText;
   S.Free;
 end;
 
@@ -5647,6 +6264,22 @@ begin
   Pow(beta);
 
   SqrElements.Free;
+end;
+
+procedure TNNetVolume.GetTokenArray(var TokenArray: TNNetTokenArray);
+var
+  I, vHigh: integer;
+begin
+  if (Length(TokenArray) <> FSize) then SetLength(TokenArray, FSize);
+  if FSize > 0 then
+  begin
+    vHigh := FSize - 1;
+    for I := 0 to vHigh do
+    begin
+      TokenArray[I].Token:=I;
+      TokenArray[I].Score:=FData[I];
+    end;
+  end;
 end;
 
 procedure TNNetVolume.InterleavedDotProduct(InterleavedAs,
@@ -9762,6 +10395,31 @@ begin
   begin
     SourceRawPos := Original.GetRawPtr(0, CntY, 0);
     DestRawPos := GetRawPtr(Padding, CntY + Padding, 0);
+    asm_dword_copy;
+  end;
+end;
+
+procedure TNNetVolume.CopyPadding(Original: TNNetVolume; PaddingX, PaddingY: integer
+  );
+var
+  CntY: integer;
+  NewSizeX, NewSizeY: integer;
+  MaxY: integer;
+  RowSize: integer;
+  SourceRawPos, DestRawPos: pointer;
+begin
+  NewSizeX := Original.SizeX + PaddingX * 2;
+  NewSizeY := Original.SizeY + PaddingY * 2;
+  MaxY := Original.SizeY - 1;
+  RowSize := Original.SizeX * Original.Depth;
+
+  Resize(NewSizeX, NewSizeY, Original.Depth);
+  Fill(0);
+
+  for CntY := 0 to MaxY do
+  begin
+    SourceRawPos := Original.GetRawPtr(0, CntY, 0);
+    DestRawPos := GetRawPtr(PaddingX, CntY + PaddingY, 0);
     asm_dword_copy;
   end;
 end;

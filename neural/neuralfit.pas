@@ -54,37 +54,39 @@ type
       FCurrentEpoch: integer;
       FCurrentStep: integer;
       FCurrentTrainingError: TNeuralFloat;
+      FCustomLearningRateScheduleFn: TCustomLearningRateScheduleFn;
+      FCustomLearningRateScheduleObjFn: TCustomLearningRateScheduleObjFn;
+      FDataAugmentation: boolean;
+      FFinishedThread: TNNetVolume;
+      {$IFDEF HASTHREADS}FCritSec: TRTLCriticalSection;{$ENDIF}
       FNN: TNNet;
       FGlobalHit: integer;
       FGlobalMiss: integer;
       FGlobalTotal: integer;
       FGlobalTotalLoss: single;
       FGlobalErrorSum: single;
-      FFinishedThread: TNNetVolume;
-      {$IFDEF HASTHREADS}FCritSec: TRTLCriticalSection;{$ENDIF}
-      FMultipleSamplesAtValidation: boolean;
-      FDataAugmentation: boolean;
-      FVerbose: boolean;
+      FInertia: single;
       FStaircaseEpochs: integer;
       FStepSize: integer;
+      FMaxEpochs: integer;
+      FMultipleSamplesAtValidation: boolean;
+      FVerbose: boolean;
       FLearningRateDecay: single;
       FInitialLearningRate: single;
       FCyclicalLearningRateLen: integer;
       FInitialEpoch: integer;
-      FMaxEpochs: integer;
       FMinLearnRate: single;
       FCurrentLearningRate: single;
-      FInertia: single;
       FL2Decay: TNeuralFloat;
+      FLogEveryBatches: integer;
       FFileNameBase: string;
       FClipDelta: single;
       FTargetAccuracy: single;
-      FCustomLearningRateScheduleFn: TCustomLearningRateScheduleFn;
-      FCustomLearningRateScheduleObjFn: TCustomLearningRateScheduleObjFn;
       FOnAfterStep, FOnAfterEpoch, FOnStart: TNotifyEvent;
       FRunning, FShouldQuit: boolean;
       FTrainingAccuracy, FValidationAccuracy, FTestAccuracy: TNeuralFloat;
       FMinBackpropagationError: TNeuralFloat;
+      FMinBackpropagationErrorProportion: TNeuralFloat;
       FLoadBestAdEnd: boolean;
       FTestBestAtEnd: boolean;
       {$IFDEF OpenCL}
@@ -120,9 +122,11 @@ type
       property InitialLearningRate: single read FInitialLearningRate write FInitialLearningRate;
       property LearningRateDecay: single read FLearningRateDecay write FLearningRateDecay;
       property LoadBestAtEnd: boolean read FLoadBestAdEnd write FLoadBestAdEnd;
+      property LogEveryBatches: integer read FLogEveryBatches write FLogEveryBatches;
       property L2Decay: single read FL2Decay write FL2Decay;
       property MaxThreadNum: integer read FMaxThreadNum write FMaxThreadNum;
       property MinBackpropagationError: TNeuralFloat read FMinBackpropagationError write FMinBackpropagationError;
+      property MinBackpropagationErrorProportion: TNeuralFloat read FMinBackpropagationErrorProportion write FMinBackpropagationErrorProportion;
       property Momentum: single read FInertia write FInertia;
       property MultipleSamplesAtValidation: boolean read FMultipleSamplesAtValidation write FMultipleSamplesAtValidation;
       property NN: TNNet read FNN;
@@ -176,7 +180,11 @@ type
   TNNetGet2VolumesProc = procedure(Idx: integer; ThreadId: integer; pInput, pOutput: TNNetVolume) of object;
 
   /// Fitting algorithm with data (pairs) loading
+
+  { TNeuralDataLoadingFit }
+
   TNeuralDataLoadingFit = class(TNeuralFitWithImageBase)
+  private
     protected
       FDataAugmentationFn: TNNetDataAugmentationFn;
       FInferHitFn: TNNetInferHitFn;
@@ -202,6 +210,7 @@ type
       procedure EnableBipolar99HitComparison();
       procedure EnableClassComparison();
       procedure EnableDefaultImageTreatment(); override;
+      procedure EnableDefaultLoss;
 
       // On most cases, you should never call the following methods directly
       procedure RunNNThread(index, threadnum: integer);
@@ -652,7 +661,7 @@ begin
         FTrainingAccuracy := AccuracyWithInertia/100;
       end;
 
-      if ( (FGlobalTotal > 0) and (I mod 10 = 0) ) then
+      if ( (FGlobalTotal > 0) and (I mod FLogEveryBatches = 0) ) then
       begin
         totalTimeSeconds := (Now() - startTime) * 24 * 60 * 60;
         if FVerbose then MessageProc
@@ -799,8 +808,8 @@ begin
     Append(CSVFile);
 
     MessageProc(
-      'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*10))/60,ffFixed,1,4)+' minutes.' +
-      ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*10))/3600,ffFixed,1,4)+' hours.');
+      'Epoch time: ' + FloatToStrF( totalTimeSeconds*(TrainingCnt/(FStepSize*FLogEveryBatches))/60,ffFixed,1,4)+' minutes.' +
+      ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(TrainingCnt/(FStepSize*FLogEveryBatches))/3600,ffFixed,1,4)+' hours.');
 
     MessageProc(
       'Epochs: '+IntToStr(FCurrentEpoch)+
@@ -1057,8 +1066,14 @@ begin
     LocalErrorSum := LocalErrorSum + CurrentError;
 
     if (CurrentError > FMinBackpropagationError) or
-      (CurrentError > FCurrentTrainingError/4)
-      then LocalNN.Backpropagate( vOutput );
+      (
+        (FCurrentTrainingError>0) and
+        (CurrentError > FCurrentTrainingError*FMinBackpropagationErrorProportion)
+      )
+      then
+    begin
+      LocalNN.Backpropagate( vOutput );
+    end;
 
     CurrentLoss := 0;
     if Assigned(FLossFn) then
@@ -1444,11 +1459,16 @@ begin
   FInferHitFn := {$IFDEF FPC}@{$ENDIF}ClassCompare;
 end;
 
+procedure TNeuralDataLoadingFit.EnableDefaultLoss();
+begin
+  FLossFn := {$IFDEF FPC}@{$ENDIF}DefaultLossFn;
+end;
+
 procedure TNeuralDataLoadingFit.EnableDefaultImageTreatment();
 begin
   inherited EnableDefaultImageTreatment();
   EnableClassComparison();
-  FLossFn := {$IFDEF FPC}@{$ENDIF}DefaultLossFn;
+  EnableDefaultLoss();
 end;
 
 { TNeuralFitBase }
@@ -1484,6 +1504,7 @@ begin
   FCyclicalLearningRateLen := 0; // not cyclical by default.
   FInitialEpoch := 0;
   FMinBackpropagationError := 0;
+  FMinBackpropagationErrorProportion := 0.25;
   fMinLearnRate := FInitialLearningRate * 0.01;
   FInertia := 0.9;
   FClipDelta := 0.0;
@@ -1504,6 +1525,7 @@ begin
   FCurrentStep := 0;
   FLoadBestAdEnd := True;
   FTestBestAtEnd := True;
+  FLogEveryBatches := 10;
 end;
 
 destructor TNeuralFitBase.Destroy();
@@ -1605,6 +1627,7 @@ begin
   FIsSoftmax := true;
   FMaxCropSize := 8;
   FMinBackpropagationError := 0.2;
+  FMinBackpropagationErrorProportion := 0.25;
   FMultipleSamplesAtValidation := true;
   FTrainingSampleProcessedCnt := TNNetVolume.Create;
 end;
@@ -1751,7 +1774,9 @@ begin
       ' Batch size:' + IntToStr(FBatchSize) +
       ' Step size:' + IntToStr(FStepSize) +
       ' Staircase ephocs:' + IntToStr(FStaircaseEpochs) +
-      ' Min backprop error:' + FloatToStrF(MinBackpropagationError,ffFixed,4,2)
+      ' Min backprop error and proportion:' +
+        FloatToStrF(FMinBackpropagationError,ffFixed,4,2)+' '+
+        FloatToStrF(FMinBackpropagationErrorProportion,ffFixed,4,2)
     );
     if Assigned(FImgVolumes) then MessageProc('Training images: '+IntToStr(FImgVolumes.Count));
     if Assigned(FImgValidationVolumes) then MessageProc('Validation images: '+IntToStr(FImgValidationVolumes.Count));
@@ -1837,7 +1862,7 @@ begin
         FTrainingAccuracy := AccuracyWithInertia/100;
       end;
 
-      if ( (FGlobalTotal > 0) and (I mod 10 = 0) ) then
+      if ( (FGlobalTotal > 0) and (I mod FLogEveryBatches = 0) ) then
       begin
         totalTimeSeconds := (Now() - startTime) * 24 * 60 * 60;
         if FVerbose then MessageProc
@@ -2003,8 +2028,8 @@ begin
       Append(CSVFile);
 
       MessageProc(
-        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/60,ffFixed,1,4)+' minutes.' +
-        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(pImgVolumes.Count/(FStepSize*10))/3600,ffFixed,1,4)+' hours.');
+        'Epoch time: ' + FloatToStrF( totalTimeSeconds*(pImgVolumes.Count/(FStepSize*FLogEveryBatches))/60,ffFixed,1,4)+' minutes.' +
+        ' '+IntToStr(Epochs)+' epochs: ' + FloatToStrF( Epochs*totalTimeSeconds*(pImgVolumes.Count/(FStepSize*FLogEveryBatches))/3600,ffFixed,1,4)+' hours.');
 
       MessageProc(
         'Epochs: '+IntToStr(FCurrentEpoch)+
@@ -2175,8 +2200,12 @@ begin
       OutputValue := Max(OutputValue, 0.001);
     end;
 
-    if (CurrentError>FMinBackpropagationError) or
-      (CurrentError>FCurrentTrainingError/4) then
+    if
+      (CurrentError > FMinBackpropagationError) or
+      (
+        (FCurrentTrainingError>0) and
+        (CurrentError > FCurrentTrainingError*FMinBackpropagationErrorProportion)
+      ) then
     begin
       LocalNN.Backpropagate(vOutput);
     end
@@ -2496,6 +2525,7 @@ begin
   FHasMakeGray := True;
   FMaxCropSize := 8;
   FMinBackpropagationError := 0.2;
+  FMinBackpropagationErrorProportion := 0.25;
   FMultipleSamplesAtValidation := True;
 end;
 
