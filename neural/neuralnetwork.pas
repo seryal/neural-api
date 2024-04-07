@@ -21,43 +21,7 @@ unit neuralnetwork;
 
 (*
 // coded, adapted and ported by Joao Paulo Schwarz Schuler
-// https://sourceforge.net/p/cai/
-----------------------------------------------
-You can find simple to understand examples at:
-https://sourceforge.net/p/cai/svncode/HEAD/tree/trunk/lazarus/experiments/supersimple/
-https://sourceforge.net/p/cai/svncode/HEAD/tree/trunk/lazarus/experiments/supersimplecorrelation/
-----------------------------------------------
-There are CIFAR-10 examples at:
-https://sourceforge.net/p/cai/svncode/HEAD/tree/trunk/lazarus/testcnnalgo/testcnnalgo.lpr
-https://sourceforge.net/p/cai/svncode/HEAD/tree/trunk/lazarus/experiments/visualCifar10BatchUpdate/
-https://sourceforge.net/p/cai/svncode/HEAD/tree/trunk/lazarus/experiments/visualCifar10OpenCL/
-----------------------------------------------
-Example - How to Create Your Network
-NumClasses := 10;
-NN := TNNet.Create();
-NN.AddLayer( TNNetInput.Create(32,32,3) );
-NN.AddLayer( TNNetConvolutionReLU.Create( 16,5,0,0) );
-NN.AddLayer( TNNetMaxPool.Create(2) );
-NN.AddLayer( TNNetConvolutionReLU.Create(128,5,0,0) );
-NN.AddLayer( TNNetMaxPool.Create(2) );
-NN.AddLayer( TNNetConvolutionReLU.Create(128,5,0,0) );
-NN.AddLayer( TNNetLayerFullConnectReLU.Create(64) );
-NN.AddLayer( TNNetLayerFullConnect.Create(NumClasses) );
-NN.SetLearningRate(0.01,0.8);
-----------------------------------------------
-Example - How to create a simple fully forward connected network 3x3
-NN := TNNet.Create();
-NN.AddLayer( TNNetInput.Create(3) );
-NN.AddLayer( TNNetLayerFullConnectReLU.Create(3) );
-NN.AddLayer( TNNetLayerFullConnectReLU.Create(3) );
-NN.SetLearningRate(0.01,0.8);
-----------------------------------------------
-Example - How to Train Your Network
-// InputVolume and vDesiredVolume are of the type TNNetVolume
-NN.Compute(InputVolume);
-NN.GetOutput(PredictedVolume);
-vDesiredVolume.SetClassForReLU(DesiredClass);
-NN.Backpropagate(vDesiredVolume);
+// https://github.com/joaopauloschuler/neural-api/
 ----------------------------------------------
 Interesting links:
 http://cs.stanford.edu/people/karpathy/convnetjs/demo/cifar10.html
@@ -194,6 +158,7 @@ type
       FLearningRate: TNeuralFloat;
       FL2Decay: TNeuralFloat;
       FStruct: array [0..csNNetMaxParameterIdx] of integer;
+      FFloatSt: array [0..csNNetMaxParameterIdx] of TNeuralFloat;
 
       //backpropagation properties
       FDepartingBranchesCnt: integer;
@@ -371,7 +336,7 @@ type
       FVectorSize, FVectorSizeBytes: integer;
       FNeuronWeightList: TNNetVolumeList;
       FConcatedWeights: TNNetVolume;
-      FConcatedWInter: TNNetVolume;
+      FConcatedWInter: TNNetVolume; // This is the same as transposed concated weights
       FBiasOutput: TNNetVolume;
       FShouldConcatWeights: boolean;
       FShouldInterleaveWeights: boolean;
@@ -650,14 +615,14 @@ type
   // learning but can also provoke overflows.
   TNNetMulLearning = class(TNNetIdentity)
     public
-      constructor Create(pMul: integer); overload;
+      constructor Create(pMul: TNeuralFloat); overload;
       procedure Backpropagate(); override;
   end;
 
   /// This layer multiplies the output by a constant.
   TNNetMulByConstant = class(TNNetMulLearning)
     public
-      //constructor Create(pMul: integer); overload;
+      // constructor Create(pMul: integer); overload;
       procedure Compute(); override;
   end;
 
@@ -671,6 +636,51 @@ type
   TNNetAddAndDiv = class(TNNetIdentity)
   public
     constructor Create(pAdd, pDiv: integer); overload;
+    procedure Compute(); override;
+  end;
+
+  { TNNetAddPositionalEmbedding }
+  // Adds positional embedding as per paper "Attention Is All You Need".
+  // https://arxiv.org/abs/1706.03762 .
+  TNNetAddPositionalEmbedding = class(TNNetIdentity)
+  private
+    FPositionalEmbedding: TNNetVolume;
+    procedure SetPrevLayer(pPrevLayer: TNNetLayer); override;
+  public
+    constructor Create(n: integer = 0); overload;
+    destructor Destroy(); override;
+
+    procedure Compute(); override;
+  end;
+
+  { TNNetEmbedding }
+  // Do not use this layer. It's under construction.
+  TNNetEmbedding = class(TNNetLayer)
+  private
+    FVocabSize: integer;
+    FEmbeddingSize: integer;
+    FInputTokens: array of integer;
+    procedure SetPrevLayer(pPrevLayer: TNNetLayer); override;
+  public
+    constructor Create(pVocabSize, pEmbeddingSize: integer);
+    destructor Destroy; override;
+
+    procedure InitDefault(); override;
+    procedure Compute(); override;
+    procedure Backpropagate(); override;
+  end;
+
+  { TNNetTokenAndPositionalEmbedding }
+  // Do not use this layer. It's under construction.
+  TNNetTokenAndPositionalEmbedding = class(TNNetEmbedding)
+  private
+    FPositionalEmbedding: TNNetVolume;
+    FPositionalEmbeddingN: integer;
+    procedure SetPrevLayer(pPrevLayer: TNNetLayer); override;
+  public
+    constructor Create(pVocabSize, pEmbeddingSize: integer; PositionalEmbeddingN: integer = 0);
+    destructor Destroy; override;
+
     procedure Compute(); override;
   end;
 
@@ -754,6 +764,18 @@ type
       procedure Backpropagate(); override;
       procedure InitDefault(); override;
       function GetMaxAbsoluteDelta(): TNeuralFloat; override;
+  end;
+
+  // This layer is experimental. Do not use.
+  TNNetMovingScale = class(TNNetIdentityWithoutL2)
+    private
+      FChangeRate: TNeuralFloat;
+      FMaxTarget: TNeuralFloat;
+    public
+      constructor Create(pMaxTarget: TNeuralFloat = 1; pChangeRate: TNeuralFloat = 1); overload;
+      procedure Compute(); override;
+      procedure Backpropagate(); override;
+      procedure InitDefault(); override;
   end;
 
   // This is an experimental layer. Do not use it.
@@ -966,6 +988,27 @@ type
     procedure Backpropagate(); override;
   end;
 
+  /// This layer is under construction. DO NOT USE IT.
+  // This layer run the TNNetVolume.DotProducts for layers A and B.
+  TNNetDotProducts = class(TNNetLayer)
+  private
+    FA: TNNetLayer; // Layer A
+    FB: TNNetLayer; // Layer B
+    FAError: TNNetVolume; // Layer A: Error
+    FBError: TNNetVolume; // Layer B: Error
+    FAT: TNNetVolume; // Layer A: Output Transposed
+    FBT: TNNetVolume; // Layer B: Output Transposed
+    FET: TNNetVolume; // Error Transposed
+    procedure SetPrevLayer(pPrevLayer: TNNetLayer); override;
+  public
+    constructor Create(A, B: TNNetLayer); overload;
+    constructor Create(AIdx, BIdx: integer); overload;
+    destructor Destroy(); override;
+
+    procedure Compute(); override;
+    procedure Backpropagate(); override;
+  end;
+
   /// picks/splits from previous layer selected channels.
   TNNetSplitChannels = class(TNNetLayer)
   private
@@ -1014,8 +1057,7 @@ type
   //FullyConnectedLayers
   TNNetFullConnectClass = class of TNNetFullConnect;
 
-  /// Fully connected layer without activation function. This layer is useful
-  // before softmax layers.
+  /// Fully connected layer without activation function.
   TNNetFullConnectLinear = class(TNNetFullConnect)
   private
     procedure ComputePreviousLayerErrorCPU(); override;
@@ -1034,6 +1076,7 @@ type
   end;
 
   /// Fully connected layer with ReLU.
+  // This layer is useful before softmax layers.
   TNNetFullConnectReLU = class(TNNetFullConnectLinear)
   private
     procedure ComputePreviousLayerErrorCPU(); override;
@@ -1056,12 +1099,26 @@ type
     procedure Backpropagate(); override;
   end;
 
+  // Pointwise softmax operation.
+  TNNetPointwiseSoftMax = class(TNNetIdentity)
+  public
+    procedure Compute(); override;
+    procedure Backpropagate(); override;
+  end;
+
   /// Common softmax layer.
-  TNNetSoftMax = class(TNNetIdentity)
+  TNNetSoftMax = class(TNNetPointwiseSoftMax)
     protected
       FSoftTotalSum: TNeuralFloat;
+      FSkipBackpropDerivative: boolean;
     public
+      // Although skipping the derivative calculation is a non standard usage,
+      // skipping the derivative can give higher classification accuracy at
+      // image classification tasks with 10x smaller learning rate.
+      constructor Create(SkipBackpropDerivative: integer = 0);
+
       procedure Compute(); override;
+      procedure Backpropagate(); override;
   end;
 
   TNNetLayerFullConnect = class(TNNetFullConnect);
@@ -1369,7 +1426,6 @@ type
       procedure Compute(); override;
   end;
 
-  /// This layer is experimental. DO NOT USE IT.
   // This layer implements a maxpool that also stores the position
   // of the maximum values.
   TNNetMaxPoolWithPosition = class(TNNetMaxPool)
@@ -1508,6 +1564,8 @@ type
         Groups, pNumFeatures, pFeatureSize, pInputPadding, pStride: integer;
         pSuppressBias: integer = 0;
         ChannelInterleaving: boolean = True): TNNetLayer;
+      function AddGroupedDotProducts(A,B: TNNetLayer; Groups: integer; ChannelInterleaving: boolean): TNNetLayer;
+      function AddGroupedPointwiseSoftMax(Groups: integer; ChannelInterleaving: boolean): TNNetLayer;
       /// AddAutoGroupedPointwiseConv implements
       // pointwise convolutions of the kEffNet architecture
       // described on the paper: "Grouped Pointwise Convolutions Significantly
@@ -1566,6 +1624,13 @@ type
       function AddAvgMaxPool(pPoolSize: integer; pMaxPoolDropout: TNeuralFloat = 0; pKeepDepth:boolean = false; pAfterLayer: TNNetLayer = nil): TNNetLayer;
       function AddMinMaxChannel(pAfterLayer: TNNetLayer = nil): TNNetLayer;
       function AddAvgMaxChannel(pMaxPoolDropout: TNeuralFloat = 0; pKeepDepth:boolean = false; pAfterLayer: TNNetLayer = nil): TNNetLayer;
+      // Transformers, AddSingleHeadSelfAttention and AddSingleHeadTransformerBlock are under construction - do not use it
+      procedure AddSingleHeadSelfAttention(HasNorm: boolean; out Attended, W: TNNetLayer);
+      function AddSelfAttention(Heads: integer; HasNorm: boolean = False): TNNetLayer;
+      function AddSelfAttentionCAI(Heads: integer; HasNorm: boolean = False): TNNetLayer;
+      procedure AddSingleHeadTransformerBlock(out Result, W: TNNetLayer; HasNorm: boolean = False);
+      function AddTransformerBlock(Heads: integer; IntermediateDim: integer; HasNorm: boolean = False): TNNetLayer;
+      function AddTransformerBlockCAI(Heads: integer; IntermediateDim: integer; HasNorm: boolean = False): TNNetLayer;
       procedure AddToExponentialWeightAverage(NewElement: TNNet; Decay: TNeuralFloat);
       procedure AddToWeightAverage(NewElement: TNNet; CurrentElementCount: integer);
       function GetFirstLayer(): TNNetLayer;
@@ -1947,6 +2012,9 @@ type
 
   // Takes a neural network (NN) and an input string, and returns the predicted class as an integer.
   function GetClassFromChars(NN: TNNet; InputString: string): integer;
+
+  function GenerateStringFromTokens(NN: TNNet; Dict:TStringListInt; InputString: string; oSampler: TNNetSamplerBase = nil): string;
+
 implementation
 
 procedure RebuildPatternOnPreviousPatterns
@@ -2115,6 +2183,272 @@ begin
   InputVolume.Free;
 end;
 
+function GenerateStringFromTokens(NN: TNNet; Dict: TStringListInt;
+  InputString: string; oSampler: TNNetSamplerBase): string;
+var
+  InputVolume, OutputVolume: TNNetVolume;
+  NextTokenInt: integer;
+  NextTokenStr: string;
+  Tokens: array of integer;
+  TokenCnt: integer;
+begin
+  InputVolume := TNNetVolume.Create(NN.GetFirstLayer.Output);
+  OutputVolume := TNNetVolume.Create(NN.GetLastLayer().Output);
+  Result := InputString;
+  Dict.StringToIntegerArray(InputString, Tokens);
+  TokenCnt := Length(Tokens);
+  repeat
+    InputVolume.CopyReversedNoChecksIntArr(Tokens);
+    NN.Compute(InputVolume, OutputVolume);
+    if Assigned(oSampler)
+    then NextTokenInt := oSampler.GetToken(OutputVolume)
+    else NextTokenInt := OutputVolume.GetClass();
+    if NextTokenInt < Dict.Count then
+    begin
+      NextTokenStr := Dict.IntegerToWord(NextTokenInt);
+      Result := Result + ' ' + NextTokenStr;
+    end;
+    TokenCnt := TokenCnt + 1;
+    SetLength(Tokens, TokenCnt);
+    Tokens[TokenCnt - 1] := NextTokenInt;
+  until (NextTokenInt < 2) or (TokenCnt>=InputVolume.SizeX);
+  SetLength(Tokens, 0);
+  InputVolume.Free;
+  OutputVolume.Free;
+end;
+
+{ TNNetMovingScale }
+
+constructor TNNetMovingScale.Create(pMaxTarget: TNeuralFloat; pChangeRate: TNeuralFloat);
+begin
+  inherited Create;
+  InitDefault();
+  FMaxTarget := pMaxTarget;
+  FChangeRate := pChangeRate;
+  FFloatSt[0] := pMaxTarget;
+  FFloatSt[1] := pChangeRate;
+end;
+
+procedure TNNetMovingScale.Compute;
+var
+  StartTime: double;
+  Multiplier: TNeuralFloat;
+begin
+  StartTime := Now();
+  inherited Compute;
+  Multiplier := FNeurons[0].FWeights.FData[0];
+  if Multiplier <= 0.001 then
+  begin
+    Multiplier := 0.001;
+  end;
+  if (Multiplier<>1) then
+  begin
+    FOutput.Mul(Multiplier);
+  end;
+  FForwardTime := FForwardTime + (Now() - StartTime);
+end;
+
+procedure TNNetMovingScale.Backpropagate;
+var
+  StartTime: double;
+  MaxAbs: TNeuralFloat;
+  Multiplier, Diff: TNeuralFloat;
+begin
+  Inc(FBackPropCallCurrentCnt);
+  if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
+  StartTime := Now();
+  Multiplier := FNeurons[0].FWeights.FData[0];
+  if Multiplier <= 0.001 then
+  begin
+    Multiplier := 0.001;
+  end;
+  MaxAbs := FOutput.GetMaxAbs();
+  if MaxAbs <> 0 then
+  begin
+    Diff := FMaxTarget-MaxAbs;
+    if (Diff < 0) or (Diff>0.75) then
+    begin
+      FNeurons[0].FDelta.Add(0, 0, 0, (Diff)*FLearningRate*FChangeRate);
+      if (not FBatchUpdate) then
+      begin
+        FNeurons[0].UpdateWeights(FInertia);
+        AfterWeightUpdate();
+      end;
+    end;
+  end;
+  if (Multiplier > 0) and (Multiplier <> 1) then
+  begin
+    FOutputError.Mul(Multiplier);
+    //if Random(100)=0 then WriteLn(MaxAbs,' ->', Multiplier:10:8);
+  end;
+  FBackwardTime := FBackwardTime + (Now() - StartTime);
+  inherited Backpropagate();
+end;
+
+procedure TNNetMovingScale.InitDefault;
+begin
+  if FNeurons.Count < 1 then AddMissingNeurons(1);
+  SetNumWeightsForAllNeurons(1, 1, 1);
+  FNeurons[0].FWeights.FData[0] := 1;
+end;
+
+{ TNNetDotProducts }
+
+procedure TNNetDotProducts.SetPrevLayer(pPrevLayer: TNNetLayer);
+begin
+  inherited SetPrevLayer(pPrevLayer);
+  FA := pPrevLayer.NN.Layers[ FStruct[0] ];
+  FB := pPrevLayer.NN.Layers[ FStruct[1] ];
+  if FA.Output.Depth <> FB.Output.Depth then
+  begin
+    FErrorProc(
+      'TNNetDotProducts - Depths differ '+
+      IntToStr(FA.Output.Depth) + ' ' +
+      IntToStr(FB.Output.Depth) + '.'
+    );
+  end;
+  FOutput.ReSize(
+    FB.Output.SizeX,
+    FB.Output.SizeY,
+    FA.Output.SizeX * FA.Output.SizeY
+  );
+  FOutputError.Resize(FOutput);
+  FOutputErrorDeriv.Resize(FOutput);
+end;
+
+constructor TNNetDotProducts.Create(A, B: TNNetLayer);
+begin
+  Self.Create(A.LayerIdx, B.LayerIdx);
+end;
+
+constructor TNNetDotProducts.Create(AIdx, BIdx: integer);
+begin
+  inherited Create;
+  FAT := TNNetVolume.Create();
+  FBT := TNNetVolume.Create();
+  FET := TNNetVolume.Create();
+  FAError := TNNetVolume.Create();
+  FBError := TNNetVolume.Create();
+
+  FStruct[0] := AIdx;
+  FStruct[1] := BIdx;
+end;
+
+destructor TNNetDotProducts.Destroy;
+begin
+  FAError.Free;
+  FBError.Free;
+  FET.Free;
+  FBT.Free;
+  FAT.Free;
+  inherited Destroy;
+end;
+
+procedure TNNetDotProducts.Compute;
+var
+  StartTime: double;
+begin
+  StartTime := Now();
+  FOutput.DotProductsPointwise(FA.Output, FB.Output);
+  FForwardTime := FForwardTime + (Now() - StartTime);
+end;
+
+procedure TNNetDotProducts.Backpropagate;
+var
+  StartTime: double;
+begin
+  StartTime := Now();
+  Inc(FBackPropCallCurrentCnt);
+  if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
+
+  FAT.CopyTransposingAs2D(FA.Output);
+  FBT.CopyTransposingAs2D(FB.Output);
+  FET.CopyTransposingAs2D(FOutputError);
+
+  FAError.DotProductsPointwise(FBT, FET);
+  FBError.DotProductsPointwise(FAT, FOutputError);
+
+  FA.OutputError.Add(FAError);
+  FB.OutputError.Add(FBError);
+
+  FBackwardTime := FBackwardTime + (Now() - StartTime);
+  FB.Backpropagate();
+  FA.Backpropagate();
+end;
+
+{ TNNetPointwiseSoftMax }
+
+procedure TNNetPointwiseSoftMax.Compute;
+var
+  StartTime: double;
+begin
+  StartTime := Now();
+  inherited Compute;
+  FOutput.PointwiseSoftMax();
+  FForwardTime := FForwardTime + (Now() - StartTime);
+end;
+
+procedure TNNetPointwiseSoftMax.Backpropagate;
+var
+  StartTime: double;
+  {$IFDEF Debug}
+  Min, Max: TNeuralFloat;
+  {$ENDIF}
+begin
+  StartTime := Now();
+  Inc(FBackPropCallCurrentCnt);
+  if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
+  if Assigned(FPrevLayer) and
+    (FPrevLayer.OutputError.Size > 0) and
+    (FPrevLayer.OutputError.Size = FPrevLayer.Output.Size) then
+  begin
+    // derivative is: x*(1-x)
+    // https://eli.thegreenplace.net/2016/the-softmax-function-and-its-derivative/
+    // https://github.com/neuroph/neuroph/blob/master/neuroph-2.9/Contrib/src/main/java/org/neuroph/contrib/learning/SoftMax.java
+    FOutputErrorDeriv.Fill(1);
+    FOutputErrorDeriv.Sub(FOutput);
+    FOutputErrorDeriv.Mul(FOutput);
+    FPrevLayer.OutputError.MulAdd(FOutputError, FOutputErrorDeriv);
+  end;
+  {$IFDEF Debug}
+  Min := FOutputErrorDeriv.GetMin();
+  Max := FOutputErrorDeriv.GetMax();
+  if Min < 0 then FErrorProc('Softmax derivative is negative: '+FloatToStrF(Min,ffFixed,6,4));
+  if Max > 0.25 then FErrorProc('Softmax derivative is bigger than 0.25: '+FloatToStrF(Max,ffFixed,6,4));
+  {$ENDIF}
+  FBackwardTime := FBackwardTime + (Now() - StartTime);
+  FPrevLayer.Backpropagate();
+end;
+
+{ TNNetAddPositionalEmbedding }
+procedure TNNetAddPositionalEmbedding.SetPrevLayer(pPrevLayer: TNNetLayer);
+begin
+  inherited SetPrevLayer(pPrevLayer);
+  FPositionalEmbedding.ReSize(FOutput);
+  FPositionalEmbedding.PositionalEncoding(FStruct[0]);
+end;
+
+constructor TNNetAddPositionalEmbedding.Create(n: integer);
+begin
+  inherited Create;
+  FPositionalEmbedding := TNNetVolume.Create;
+  if n=0
+  then FStruct[0] := 10000
+  else FStruct[0] := n;
+end;
+
+destructor TNNetAddPositionalEmbedding.Destroy;
+begin
+  FPositionalEmbedding.Free;
+  inherited Destroy;
+end;
+
+procedure TNNetAddPositionalEmbedding.Compute;
+begin
+  inherited Compute;
+  FOutput.Add(FPositionalEmbedding);
+end;
+
 { TNNetTransposeYD }
 
 procedure TNNetTransposeYD.SetPrevLayer(pPrevLayer: TNNetLayer);
@@ -2126,11 +2460,17 @@ begin
 end;
 
 procedure TNNetTransposeYD.Compute;
+var
+  StartTime: double;
 begin
-    FOutput.CopyTransposingYD(FPrevLayer.FOutput);
+  StartTime := Now();
+  FOutput.CopyTransposingYD(FPrevLayer.FOutput);
+  FForwardTime := FForwardTime + (Now() - StartTime);
 end;
 
 procedure TNNetTransposeYD.Backpropagate;
+var
+  StartTime: double;
 begin
   Inc(FBackPropCallCurrentCnt);
   if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
@@ -2138,7 +2478,9 @@ begin
     (FPrevLayer.OutputError.Size > 0) and
     (FPrevLayer.OutputError.Size = FPrevLayer.Output.Size) then
   begin
+    StartTime := Now();
     FPrevLayer.FOutputError.AddTransposingYD(FOutputError);
+    FBackwardTime := FBackwardTime + (Now() - StartTime);
   end;
   FPrevLayer.Backpropagate();
 end;
@@ -2154,8 +2496,12 @@ begin
 end;
 
 procedure TNNetTransposeXD.Compute;
+var
+  StartTime: double;
 begin
+  StartTime := Now();
   FOutput.CopyTransposingXD(FPrevLayer.FOutput);
+  FForwardTime := FForwardTime + (Now() - StartTime);
 end;
 
 procedure TNNetTransposeXD.Backpropagate;
@@ -2663,25 +3009,34 @@ end;
 
 { TNNetDebug }
 procedure TNNetDebug.Compute();
+var
+  StartTime: double;
 begin
   inherited Compute();
   if ((FStruct[0]>0) and (Random(1000)=0)) then
   begin
+    StartTime := Now();
     Write('Forward:');
     FOutput.PrintDebug();
     WriteLn;
+    FForwardTime := FForwardTime + (Now() - StartTime);
   end;
 end;
 
 procedure TNNetDebug.Backpropagate();
+var
+  StartTime: double;
 begin
-  Inc(FBackPropCallCurrentCnt);
-  if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
+  // FBackPropCallCurrentCnt check is inherited done.
+  //Inc(FBackPropCallCurrentCnt);
+  //if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
   if ((FStruct[1]>0) and (Random(1000)=0)) then
   begin
+    StartTime := Now();
     Write('Backward:');
     FOutputError.PrintDebug();
     WriteLn;
+    FBackwardTime := FBackwardTime + (Now() - StartTime);
   end;
   inherited Backpropagate();
 end;
@@ -3248,7 +3603,7 @@ end;
 procedure TNNetMulByConstant.Compute();
 begin
   inherited Compute();
-  FOutput.Mul(FStruct[0]);
+  FOutput.Mul(FFloatSt[0]);
 end;
 
 procedure TNNetCellMulByCell.SetPrevLayer(pPrevLayer: TNNetLayer);
@@ -5733,9 +6088,9 @@ begin
     RefreshNeuronWeightList();
     AfterWeightUpdate();
 
-    FConcatedWeights.ReSize(FNeuronWeightList.GetTotalSize(),1,1);
+    FConcatedWeights.ReSize(FNeuronWeightList.Count, 1, FNeuronWeightList[0].Size);
 
-    FConcatedWInter.ReSize(FNeuronWeightList.GetTotalSize(),1,1);
+    FConcatedWInter.ReSize(FNeuronWeightList[0].Size, 1, FNeuronWeightList.Count);
 
     //WriteLn(' Layer:', Self.LayerIdx,' Vector:',FVectorSize,' Neuron count:',FNeuronWeightList.Count,' Output size:',FOutput.Size);
     FShouldInterleaveWeights := true;
@@ -5809,10 +6164,14 @@ begin
 end;
 
 { TNNetMulLearning }
-constructor TNNetMulLearning.Create(pMul: integer);
+constructor TNNetMulLearning.Create(pMul: TNeuralFloat);
 begin
   inherited Create();
-  FStruct[0] := pMul;
+  FFloatSt[0] := pMul;
+  if pMul = 0 then
+  begin
+    FErrorProc('TNNetMulLearning or TNNetMulByConstant can not be zero.');
+  end;
 end;
 
 procedure TNNetMulLearning.Backpropagate();
@@ -5822,7 +6181,7 @@ begin
   StartTime := Now();
   Inc(FBackPropCallCurrentCnt);
   if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
-  FOutputError.Mul(FStruct[0]);
+  FOutputError.Mul(FFloatSt[0]);
   FBackwardTime := FBackwardTime + (Now() - StartTime);
   inherited Backpropagate();
 end;
@@ -5834,9 +6193,6 @@ var
   SizeX, SizeY, Deep: integer;
 begin
   inherited Create();
-  SizeX := aL[0].FOutput.SizeX;
-  SizeY := aL[0].FOutput.SizeY;
-  Deep  := aL[0].FOutput.Depth;
 
   if Length(aL) < 1 then
   begin
@@ -5844,6 +6200,10 @@ begin
   end
   else
   begin
+    SizeX := aL[0].FOutput.SizeX;
+    SizeY := aL[0].FOutput.SizeY;
+    Deep  := aL[0].FOutput.Depth;
+
     for LayerCnt := Low(aL) to High(aL) do
     begin
       if
@@ -6434,6 +6794,217 @@ begin
   Result := AddLayer( TNNetConvolutionLinear.Create(3,1,0,0) );
 end;
 
+// Ported code from:
+// https://github.com/tgautam03/Transformers/blob/master/classification.ipynb
+procedure TNNet.AddSingleHeadSelfAttention(HasNorm: boolean;
+  out Attended, W: TNNetLayer);
+var
+  x, Query, Key, ValueT: TNNetLayer; // WT, YT, Value
+  EmbeddingDim: integer;
+begin
+  x := GetLastLayer();
+  EmbeddingDim := x.Output.Depth;
+  if HasNorm then
+  begin
+    Query := AddLayerAfter( [TNNetPointwiseConvLinear.Create(EmbeddingDim), TNNetMovingScale.Create()], x);
+    Key   := AddLayerAfter( [TNNetPointwiseConvLinear.Create(EmbeddingDim), TNNetMovingScale.Create()], x);
+    (*Value:=*)AddLayerAfter( [TNNetPointwiseConvLinear.Create(EmbeddingDim), TNNetMovingScale.Create()], x);
+  end
+  else
+  begin
+    Query := AddLayerAfter( TNNetPointwiseConvLinear.Create(EmbeddingDim), x);
+    Key   := AddLayerAfter( TNNetPointwiseConvLinear.Create(EmbeddingDim), x);
+    (*Value:=*)AddLayerAfter( TNNetPointwiseConvLinear.Create(EmbeddingDim), x);
+  end;
+  ValueT := AddLayer( TNNetTransposeXD.Create() );
+  (*WT := *)AddLayer( TNNetDotProducts.Create(Query, Key) );
+  (*WT := *)AddLayer( TNNetReLUL.Create(-100,+100,0) );
+  (*WT := *)AddLayer( TNNetMulByConstant.Create(1/Sqrt(EmbeddingDim)) );
+  (*W := *) AddLayer( TNNetTransposeXD.Create() );
+  W := AddLayer( TNNetPointwiseSoftMax.Create() );
+  (*YT := *)AddLayer( TNNetDotProducts.Create(ValueT, W) );
+  if HasNorm
+  then Attended := AddLayer( [TNNetPointwiseConvLinear.Create(EmbeddingDim), TNNetMovingScale.Create()] )
+  else Attended := AddLayer( TNNetPointwiseConvLinear.Create(EmbeddingDim) );
+end;
+
+function TNNet.AddSelfAttention(Heads: integer; HasNorm: boolean = False): TNNetLayer;
+var
+  W, Query, Key, Value, ValueT: TNNetLayer; // WT, YT, Value
+  PreviousLayer: TNNetLayer;
+  InputChannelsPerGroup: integer;
+  EachGroupOutput: array of TNNetLayer;
+  HeadCnt: integer;
+  QueryGroup, KeyGroup, ValueGroup, ValueTGroup: TNNetLayer;
+begin
+  if Heads <= 1 then
+  begin
+    AddSingleHeadSelfAttention(HasNorm, Result, W);
+  end
+  else
+  begin
+    PreviousLayer := GetLastLayer();
+    SetLength(EachGroupOutput, Heads);
+    InputChannelsPerGroup := PreviousLayer.FOutput.Depth div Heads;
+    for HeadCnt := 0 to Heads - 1 do
+    begin
+      if HasNorm then
+      begin
+        QueryGroup := AddLayerAfter( [TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), TNNetMovingScale.Create()], PreviousLayer);
+        KeyGroup := AddLayerAfter(   [TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), TNNetMovingScale.Create()], PreviousLayer);
+        ValueGroup := AddLayerAfter( [TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), TNNetMovingScale.Create()], PreviousLayer);
+      end
+      else
+      begin
+        QueryGroup := AddLayerAfter( TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), PreviousLayer);
+        KeyGroup := AddLayerAfter(   TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), PreviousLayer);
+        ValueGroup := AddLayerAfter( TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), PreviousLayer);
+      end;
+      ValueTGroup := AddLayer( TNNetTransposeXD.Create() );
+      (*WT := *)AddLayer( TNNetDotProducts.Create(QueryGroup, KeyGroup) );
+      (*WT := *)AddLayer( TNNetReLUL.Create(-100,+100,0) );
+      (*WT := *)AddLayer( TNNetMulByConstant.Create(1/Sqrt(InputChannelsPerGroup)) );
+      (*W := *) AddLayer( TNNetTransposeXD.Create() );
+      W := AddLayer( TNNetPointwiseSoftMax.Create() );
+      (*YT := *)AddLayer( TNNetDotProducts.Create(ValueTGroup, W) );
+      EachGroupOutput[HeadCnt] := AddLayer( TNNetPointwiseSoftMax.Create() );
+    end;
+    AddLayer( TNNetDeepConcat.Create(EachGroupOutput) );
+    SetLength(EachGroupOutput, 0);
+    if HasNorm
+    then Result := AddLayer( [TNNetPointwiseConvLinear.Create(PreviousLayer.FOutput.Depth), TNNetMovingScale.Create()])
+    else Result := AddLayer( TNNetPointwiseConvLinear.Create(PreviousLayer.FOutput.Depth) );
+  end;
+end;
+
+function TNNet.AddSelfAttentionCAI(Heads: integer;
+  HasNorm: boolean = False
+  ): TNNetLayer;
+var
+  W, Query, Key, Value, ValueT: TNNetLayer; // WT, YT, Value
+  PreviousLayer: TNNetLayer;
+  InputChannelsPerGroup: integer;
+  EachGroupOutput: array of TNNetLayer;
+  HeadCnt: integer;
+  QueryGroup, KeyGroup, ValueGroup, ValueTGroup: TNNetLayer;
+begin
+  if Heads <= 1 then
+  begin
+    AddSingleHeadSelfAttention(HasNorm, Result, W);
+  end
+  else
+  begin
+    PreviousLayer := GetLastLayer();
+    SetLength(EachGroupOutput, Heads);
+    InputChannelsPerGroup := PreviousLayer.FOutput.Depth div Heads;
+    for HeadCnt := 0 to Heads - 1 do
+    begin
+      if HasNorm then
+      begin
+        QueryGroup := AddLayerAfter( [TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), TNNetMovingScale.Create()], PreviousLayer);
+        KeyGroup := AddLayerAfter(   [TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), TNNetMovingScale.Create()], PreviousLayer);
+        ValueGroup := AddLayerAfter( [TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), TNNetMovingScale.Create()], PreviousLayer);
+      end
+      else
+      begin
+        QueryGroup := AddLayerAfter( TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), PreviousLayer);
+        KeyGroup := AddLayerAfter(   TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), PreviousLayer);
+        ValueGroup := AddLayerAfter( TNNetPointwiseConvLinear.Create(InputChannelsPerGroup), PreviousLayer);
+      end;
+      ValueTGroup := AddLayer( TNNetTransposeXD.Create() );
+      (*WT := *)AddLayer( TNNetDotProducts.Create(QueryGroup, KeyGroup) );
+      (*WT := *)AddLayer( TNNetReLUL.Create(-100,+100,0) );
+      (*WT := *)AddLayer( TNNetMulByConstant.Create(1/Sqrt(InputChannelsPerGroup)) );
+      (*W := *) AddLayer( TNNetTransposeXD.Create() );
+      W := AddLayer( TNNetPointwiseSoftMax.Create() );
+      (*YT := *)AddLayer( TNNetDotProducts.Create(ValueTGroup, W) );
+      EachGroupOutput[HeadCnt] := AddLayer( TNNetPointwiseSoftMax.Create() );
+    end;
+    AddLayer( TNNetDeepConcat.Create(EachGroupOutput) );
+    // Groups with few channels tend to be numerically unstable
+    if InputChannelsPerGroup < 64 then
+    begin
+      AddLayer( TNNetMulByConstant.Create(InputChannelsPerGroup/64) );
+    end;
+    SetLength(EachGroupOutput, 0);
+    if HasNorm
+    then Result := AddLayer( [TNNetPointwiseConvLinear.Create(PreviousLayer.FOutput.Depth), TNNetMovingScale.Create()])
+    else Result := AddLayer( TNNetPointwiseConvLinear.Create(PreviousLayer.FOutput.Depth) );
+  end;
+end;
+
+// Ported code from:
+// https://github.com/tgautam03/Transformers/blob/master/classification.ipynb
+procedure TNNet.AddSingleHeadTransformerBlock(
+  out Result, W: TNNetLayer;
+  HasNorm: boolean = False);
+var
+  PrevLayer, AttendedPlusPrev, Attended: TNNetLayer;
+  EmbeddingDim: integer;
+begin
+  PrevLayer := GetLastLayer();
+  EmbeddingDim := PrevLayer.Output.Depth;
+  AddSingleHeadSelfAttention(HasNorm, Attended, W);
+  AddLayer( TNNetSum.Create([Attended, PrevLayer]) );
+  if HasNorm
+  then AttendedPlusPrev := AddLayer( TNNetMovingScale.Create() )
+  else AttendedPlusPrev := GetLastLayer();
+  AddLayer( TNNetPointwiseConvReLU.Create(EmbeddingDim*4) );
+  AddLayer( TNNetPointwiseConvLinear.Create(EmbeddingDim) );
+  if HasNorm then Result := AddLayer( TNNetMovingScale.Create() );
+  AddLayer( TNNetSum.Create([ GetLastLayer(), AttendedPlusPrev]) );
+  if HasNorm
+  then Result := AddLayer( TNNetMovingScale.Create() )
+  else Result := GetLastLayer();
+end;
+
+function TNNet.AddTransformerBlock(Heads: integer;
+  IntermediateDim: integer; HasNorm: boolean = False
+  ): TNNetLayer;
+var
+  PrevLayer, AttendedPlusPrev, Attended: TNNetLayer;
+  EmbeddingDim: integer;
+begin
+  PrevLayer := GetLastLayer();
+  EmbeddingDim := PrevLayer.Output.Depth;
+  Attended := AddSelfAttention(Heads, HasNorm);
+  AddLayer( TNNetSum.Create([Attended, PrevLayer]) );
+  if HasNorm
+  then AttendedPlusPrev := AddLayer( TNNetMovingScale.Create() )
+  else AttendedPlusPrev := GetLastLayer();
+  AddLayer( TNNetPointwiseConvReLU.Create(IntermediateDim) );
+  AddLayer( TNNetPointwiseConvLinear.Create(EmbeddingDim) );
+  if HasNorm then Result := AddLayer( TNNetMovingScale.Create() );
+  AddLayer( TNNetSum.Create([ GetLastLayer(), AttendedPlusPrev]) );
+  if HasNorm
+  then Result := AddLayer( TNNetMovingScale.Create() )
+  else Result := GetLastLayer();
+end;
+
+function TNNet.AddTransformerBlockCAI(Heads: integer;
+  IntermediateDim: integer;
+  HasNorm: boolean = False
+  ): TNNetLayer;
+var
+  PrevLayer, AttendedPlusPrev, Attended: TNNetLayer;
+  EmbeddingDim: integer;
+begin
+  PrevLayer := GetLastLayer();
+  EmbeddingDim := PrevLayer.Output.Depth;
+  Attended := AddSelfAttentionCAI(Heads, HasNorm);
+  AddLayer( TNNetSum.Create([Attended, PrevLayer]) );
+  if HasNorm
+  then AttendedPlusPrev := AddLayer( TNNetMovingScale.Create() )
+  else AttendedPlusPrev := GetLastLayer();
+  AddLayer( TNNetPointwiseConvReLU.Create(IntermediateDim) );
+  AddLayer( TNNetPointwiseConvLinear.Create(EmbeddingDim) );
+  if HasNorm then Result := AddLayer( TNNetMovingScale.Create() );
+  AddLayer( TNNetSum.Create([ GetLastLayer(), AttendedPlusPrev]) );
+  if HasNorm
+  then Result := AddLayer( TNNetMovingScale.Create() )
+  else Result := GetLastLayer();
+end;
+
 { TNNetFullConnectLinear }
 
 procedure TNNetFullConnectLinear.ComputePreviousLayerErrorCPU();
@@ -6949,13 +7520,15 @@ end;
 function TNNetConcatBase.SaveStructureToString(): string;
 var
   I: integer;
+  LayersStr: string;
 begin
-  Result := inherited SaveStructureToString + ':';
+  LayersStr := '';
   for I := 0 to FPrevLayerList.Count - 1 do
   begin
-    if I > 0 then Result := Result + ';';
-    Result := Result + IntToStr(FPrevLayerList[I].FLayerIdx);
+    if I > 0 then LayersStr := LayersStr + ';';
+    LayersStr := LayersStr + IntToStr(FPrevLayerList[I].FLayerIdx);
   end;
+  Result := StringReplace(inherited SaveStructureToString,'::',':'+LayersStr+':',[rfReplaceAll]);
 end;
 
 procedure TNNetConcatBase.BackpropagateConcat();
@@ -7079,14 +7652,16 @@ end;
 function TNNetSplitChannels.SaveStructureToString(): string;
 var
   I, MaxChannels: integer;
+  LayersStr: string;
 begin
-  Result := inherited SaveStructureToString + ':';
+  LayersStr := '';
   MaxChannels := Length(FChannels) - 1;
   for I := 0 to MaxChannels do
   begin
-    if I > 0 then Result := Result + ';';
-    Result := Result + IntToStr(FChannels[I]);
+    if I > 0 then LayersStr := LayersStr + ';';
+    LayersStr := LayersStr + IntToStr(FChannels[I]);
   end;
+  Result := StringReplace(inherited SaveStructureToString,'::',':'+LayersStr+':',[rfReplaceAll]);
 end;
 
 procedure TestDataParallelism(NN: TNNet);
@@ -8370,8 +8945,12 @@ begin
 end;
 
 procedure TNNetIdentity.Compute;
+var
+  StartTime: double;
 begin
+  StartTime := Now();
   FOutput.CopyNoChecks(FPrevLayer.FOutput);
+  FForwardTime := FForwardTime + (Now() - StartTime);
 end;
 
 procedure TNNetIdentity.Backpropagate;
@@ -8710,11 +9289,46 @@ begin
   Self.Create(pSize, 1, 1, pSuppressBias);
 end;
 
-{ TNNetSoftMax }
-procedure TNNetSoftMax.Compute();
+constructor TNNetSoftMax.Create(SkipBackpropDerivative: integer);
 begin
-  inherited Compute();
+  inherited Create();
+  FSkipBackpropDerivative := (SkipBackpropDerivative > 0);
+  FStruct[0] := SkipBackpropDerivative;
+end;
+
+{ TNNetSoftMax }
+procedure TNNetSoftMax.Compute;
+var
+  StartTime: double;
+begin
+  StartTime := Now();
+  FOutput.CopyNoChecks(FPrevLayer.FOutput);
   FSoftTotalSum := FOutput.SoftMax();
+  FForwardTime := FForwardTime + (Now() - StartTime);
+end;
+
+procedure TNNetSoftMax.Backpropagate;
+var
+  StartTime: double;
+begin
+  if FSkipBackpropDerivative then
+  begin
+    Inc(FBackPropCallCurrentCnt);
+    if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
+    StartTime := Now();
+    if Assigned(FPrevLayer) and
+      (FPrevLayer.OutputError.Size > 0) and
+      (FPrevLayer.OutputError.Size = FPrevLayer.Output.Size) then
+    begin
+      FPrevLayer.OutputError.Add(FOutputError);
+    end;
+    FBackwardTime := FBackwardTime + (Now() - StartTime);
+    FPrevLayer.Backpropagate();
+  end
+  else
+  begin
+    inherited Backpropagate();
+  end;
 end;
 
 { TNNetConvolutionReLU }
@@ -9019,7 +9633,7 @@ begin
     FInputPrepared.Resize(FOutputSizeX, FOutputSizeY, FVectorSize);
   end;
   RefreshNeuronWeightList();
-  if ShouldUseInterleavedDotProduct then
+  if ShouldUseInterleavedDotProduct (*or FPointwise*) then
   begin
     FShouldConcatWeights := true;
     FShouldInterleaveWeights := true;
@@ -9422,7 +10036,7 @@ begin
 
     //BackpropagateFastCPUDev();
     //BackpropagateFastCPU();
-    BackpropagateFastTiledCPU();
+    BackpropagateFastTiledCPU(); // This is our default backprop
     //BackpropagateCPU();
 
     {$IFDEF CheckRange}ForceRangeWeights(1000);{$ENDIF}
@@ -9803,7 +10417,7 @@ begin
                     FArrNeurons[OutputD].FBiasDelta + LocalLearningErrorDeriv;
                   {$ENDIF}
 
-                  if (FCalculatePrevLayerError) then
+                  if (FCalculatePrevLayerError) (*and not(FPointwise)*) then
                   begin
                     LocalWeight := FArrNeurons[OutputD].Weights;
                     if FPointwise then
@@ -9870,6 +10484,14 @@ begin
     end;
   end;
 
+  (*
+  if (FPointwise and FCalculatePrevLayerError) then
+  begin
+    FPrevLayerErrorPadded.DotProductsPointwise(FConcatedWInter, FOutputErrorDeriv);
+    LocalPrevError.Add(FPrevLayerErrorPadded);
+  end;
+  *)
+
   if FPadding > 0 then
   begin
     FPrevLayer.OutputError.AddArea(0, 0, FPadding, FPadding, FPrevLayer.OutputError.SizeX, FPrevLayer.OutputError.SizeY, FPrevLayerErrorPadded);
@@ -9903,18 +10525,21 @@ var
   LocalLearningErrorDerivPtr: pointer;
   localNumElements, MissedElements: integer;
   MaxPrevX, MaxPrevY: integer;
-  InterErrorDeriv, InterInput: TNNetVolume;
-  NeuronCnt, NeuronPosCnt: integer;
-  LocalDelta: TNNetVolume;
 begin
-  InterErrorDeriv := TNNetVolume.Create();
-  InterInput := TNNetVolume.Create();
   MaxX := OutputError.SizeX - 1;
   MaxY := OutputError.SizeY - 1;
   MaxD := OutputError.Depth - 1;
-  MaxPrevX := 1 + FPrevLayer.FOutputError.SizeX - FFeatureSizeX;
-  MaxPrevY := 1 + FPrevLayer.FOutputError.SizeY - FFeatureSizeY;
-  LocalPrevError := FPrevLayer.OutputError;
+  if FPadding > 0 then
+  begin
+    FPrevLayerErrorPadded.Fill(0);
+    LocalPrevError := FPrevLayerErrorPadded;
+  end
+  else
+  begin
+    LocalPrevError := FPrevLayer.OutputError;
+  end;
+  MaxPrevX := 1 + LocalPrevError.SizeX - FFeatureSizeX;
+  MaxPrevY := 1 + LocalPrevError.SizeY - FFeatureSizeY;
   PrevNumElements := (FSizeXDepth div 4) * 4;
   PrevMissedElements := FSizeXDepth - PrevNumElements;
   NeuronWeights := FArrNeurons[0].Delta.Size;
@@ -9925,15 +10550,16 @@ begin
     begin
       for OutputY := 0 to MaxY do
       begin
-        PrevY := (OutputY*FStride)-FPadding;
+        PrevY := (OutputY*FStride);
         for OutputX := 0 to MaxX do
         begin
-          PrevX := (OutputX*FStride)-FPadding;
+          PrevX := (OutputX*FStride);
           OutputRawPos := FOutputErrorDeriv.GetRawPos(OutputX, OutputY);
-          if (FCalculatePrevLayerError) then LocalDestPtr  := LocalPrevError.GetRawPtr(OutputX, OutputY);
+          //TODO: the next line is probably wrong.
+          if (FCalculatePrevLayerError) then LocalDestPtr := LocalPrevError.GetRawPtr(OutputX, OutputY);
           PtrPreparedInput := FInputPrepared.GetRawPtr(OutputX, OutputY);
           CanBackpropOnPos :=
-            (PrevX >= 0) and (PrevY >= 0) and
+            //(PrevX >= 0) and (PrevY >= 0) and
             (PrevX < MaxPrevX) and
             (PrevY < MaxPrevY);
           for OutputD := 0 to MaxD do
@@ -9941,7 +10567,7 @@ begin
             {$IFDEF FPC}
             if FActivationFn = @RectifiedLinearUnit then
             begin
-              if FOutput.FData[OutputRawPos] > 0 then
+              if FOutputRaw.FData[OutputRawPos] >= 0 then
               begin
                 LocalOutputErrorDeriv := FOutputError.FData[OutputRawPos];
               end
@@ -9970,7 +10596,17 @@ begin
             LocalLearningErrorDeriv := (-FLearningRate) * LocalOutputErrorDeriv;
             if (LocalLearningErrorDeriv <> 0.0) then
             begin
-                //FArrNeurons[OutputD].Delta.MulAdd(LocalLearningErrorDeriv, PtrPreparedInput);
+                {$IFNDEF AVX64}
+                FArrNeurons[OutputD].Delta.MulAdd(LocalLearningErrorDeriv, PtrPreparedInput);
+                {$ELSE}
+                {$IFDEF Debug}
+                if localNumElements + MissedElements <> FArrNeurons[OutputD].Delta.Size
+                then FErrorProc('Error at TNNetConvolution.BackpropagateFastCPU(): neuron size doesn''t match.');
+                {$ENDIF}
+                PtrNeuronDelta := FArrNeurons[OutputD].Delta.DataPtr;
+                asm_avx64_train_neuron
+                {$ENDIF}
+
                 {$IFDEF FPC}
                 FArrNeurons[OutputD].FBiasDelta += LocalLearningErrorDeriv;
                 {$ELSE}
@@ -9978,10 +10614,10 @@ begin
                   FArrNeurons[OutputD].FBiasDelta + LocalLearningErrorDeriv;
                 {$ENDIF}
 
-                if (FCalculatePrevLayerError) then
+                if (FCalculatePrevLayerError and not(FPointwise)) then
                 begin
                   LocalWeight := FArrNeurons[OutputD].Weights;
-                  if FPointwise then
+                  (*if FPointwise then
                   begin
                     {$IFNDEF AVX64}
                     LocalPrevError.MulAdd(LocalDestPtr, LocalWeight.DataPtr, LocalOutputErrorDeriv, FInputCopy.Depth);
@@ -9996,7 +10632,7 @@ begin
                     asm_avx64_prev_backprop;
                     {$ENDIF}
                   end
-                  else
+                  else *)
                   begin
                     if CanBackpropOnPos then
                     begin
@@ -10043,6 +10679,13 @@ begin
       end;
     end;
 
+  if (FPointwise and FCalculatePrevLayerError) then
+  begin
+    FPrevLayerErrorPadded.DotProductsPointwise(FConcatedWInter, FOutputErrorDeriv);
+    LocalPrevError.Add(FPrevLayerErrorPadded);
+  end;
+
+  (*
   FOutputErrorDeriv.Mul(-FLearningRate);
   InterErrorDeriv.InterleaveWithDepthFrom(FOutputErrorDeriv, FOutputErrorDeriv.SizeX * FOutputErrorDeriv.SizeY);
   InterInput.InterleaveWithDepthFrom(FInputPrepared, FInputPrepared.SizeX * FInputPrepared.SizeY);
@@ -10064,15 +10707,18 @@ begin
         );
     end;
   end;
+  *)
+
+  if FPadding > 0 then
+  begin
+    FPrevLayer.OutputError.AddArea(0, 0, FPadding, FPadding, FPrevLayer.OutputError.SizeX, FPrevLayer.OutputError.SizeY, FPrevLayerErrorPadded);
+  end;
 
   if (not FBatchUpdate) then
   begin
     for OutputD := 0 to MaxD do FArrNeurons[OutputD].UpdateWeights(FInertia);
     AfterWeightUpdate();
   end;
-
-  InterErrorDeriv.Free;
-  InterInput.Free;
 end;
 
 constructor TNNetConvolutionAbstract.Create(pFeatureSize, pInputPadding, pStride: integer; pSuppressBias: integer = 0);
@@ -10086,8 +10732,8 @@ begin
   if FPadding > 0 then
   begin
     FInputCopy := TNNetVolume.Create;
-    FPrevLayerErrorPadded := TNNetVolume.Create;
   end;
+  FPrevLayerErrorPadded := TNNetVolume.Create;
 end;
 
 destructor TNNetConvolutionAbstract.Destroy();
@@ -10095,8 +10741,8 @@ begin
   if FPadding > 0 then
   begin
     FInputCopy.Free;
-    FPrevLayerErrorPadded.Free;
   end;
+  FPrevLayerErrorPadded.Free;
   inherited Destroy();
 end;
 
@@ -10570,6 +11216,179 @@ begin
   Result := Self;
 end;
 
+{ TNNetEmbedding }
+
+procedure TNNetEmbedding.SetPrevLayer(pPrevLayer: TNNetLayer);
+begin
+  inherited SetPrevLayer(pPrevLayer);
+  FOutput.ReSize(pPrevLayer.Output.Size, 1, FEmbeddingSize);
+  FOutputError.ReSize(FOutput);
+  SetLength(FInputTokens, pPrevLayer.Output.Size);
+end;
+
+constructor TNNetEmbedding.Create(pVocabSize, pEmbeddingSize: integer);
+begin
+  inherited Create();
+  FVocabSize := pVocabSize;
+  FEmbeddingSize := pEmbeddingSize;
+  FStruct[0] := pVocabSize;
+  FStruct[1] := pEmbeddingSize;
+  if FNeurons.Count < 1 then AddMissingNeurons(1);
+  SetNumWeightsForAllNeurons(pVocabSize, 1, pEmbeddingSize);
+  InitDefault();
+  AfterWeightUpdate();
+end;
+
+destructor TNNetEmbedding.Destroy;
+begin
+  SetLength(FInputTokens, 0);
+  inherited Destroy;
+end;
+
+// This is a glorot implementation.
+procedure TNNetEmbedding.InitDefault;
+var
+  MaxAbs: TNeuralFloat;
+begin
+  inherited InitDefault;
+  MaxAbs := FNeurons[0].FWeights.GetMaxAbs();
+  if MaxAbs > 0 then
+  begin
+    FNeurons[0].FWeights.Mul(0.5/MaxAbs);
+  end;
+end;
+
+procedure TNNetEmbedding.Compute();
+var
+  MaxToken, CntToken, CurrentToken: integer;
+  SourcePtr, DestPtr: TNeuralFloatArrPtr;
+  LocalWeights: TNNetVolume;
+  StartTime: double;
+begin
+  StartTime := Now();
+  MaxToken := FPrevLayer.Output.Size - 1;
+  LocalWeights := FNeurons[0].Weights;
+  FOutput.Fill(0);
+  {$IFDEF Debug}
+  if FEmbeddingSize=0 then
+  begin
+    FErrorProc('Embedding size can not be zero.');
+  end;
+  if LocalWeights.Size <> FEmbeddingSize * FVocabSize then
+  begin
+    FErrorProc('Weights size do not match at TNNetEmbedding:' +
+      IntToStr(LocalWeights.Size)+' EmbeddingSize * Vocab Size:'+
+        IntToStr(FEmbeddingSize * FVocabSize)+' '+
+      ' EmbeddingSize: '+IntToStr(FEmbeddingSize)+
+      ' Vocab Size: '+IntToStr(FVocabSize)
+    );
+  end;
+  {$ENDIF}
+  for CntToken := 0 to MaxToken do
+  begin
+    CurrentToken := Round(FPrevLayer.Output.FData[CntToken]);
+    if CurrentToken >= FVocabSize then
+    begin
+      FErrorProc('Token is bigger than vocab size:'+ IntToStr(CurrentToken));
+      CurrentToken := 0;
+    end;
+    FInputTokens[CntToken] := CurrentToken;
+    SourcePtr := LocalWeights.GetRawPtr(CurrentToken, 0, 0);
+    DestPtr := FOutput.GetRawPtr(CntToken, 0, 0);
+    // TODO: replace this call by a copy function.
+    TNNetVolume.MulAdd(DestPtr, SourcePtr, 1, FEmbeddingSize);
+  end;
+  FForwardTime := FForwardTime + (Now() - StartTime);
+end;
+
+procedure TNNetEmbedding.Backpropagate();
+var
+  MaxToken, CntToken, CurrentToken: integer;
+  SourcePtr, DestPtr: TNeuralFloatArrPtr;
+  LocalWeights, LocalDelta: TNNetVolume;
+  StartTime: double;
+begin
+  LocalWeights := FNeurons[0].Weights;
+  LocalDelta := FNeurons[0].Delta;
+  {$IFDEF Debug}
+  if FEmbeddingSize=0 then
+  begin
+    FErrorProc('Embedding size can not be zero.');
+  end;
+  if FBackPropCallCurrentCnt > FDepartingBranchesCnt then
+  begin
+    FErrorProc('Backprop call count does not look right at TNNetEmbedding: '+IntToStr(FBackPropCallCurrentCnt)+' '+IntToStr(FDepartingBranchesCnt));
+  end;
+  if LocalWeights.Size <> FEmbeddingSize * FVocabSize then
+  begin
+    FErrorProc('Weights size do not match at TNNetEmbedding:' +
+      IntToStr(LocalWeights.Size)+' EmbeddingSize * Vocab Size:'+
+        IntToStr(FEmbeddingSize * FVocabSize)+' '+
+      ' EmbeddingSize: '+IntToStr(FEmbeddingSize)+
+      ' Vocab Size: '+IntToStr(FVocabSize)
+    );
+  end;
+  if LocalDelta.Size <> LocalWeights.Size then
+  begin
+    FErrorProc('Weights size and Delta Size do not match at TNNetEmbedding.' +
+      ' Weights Size: '+IntToStr(LocalWeights.Size)+
+      ' Delta Size: '+IntToStr(LocalDelta.Size)
+    );
+  end;
+  //WriteLn( LocalWeights.GetSum() );
+  {$ENDIF}
+  Inc(FBackPropCallCurrentCnt);
+  if FBackPropCallCurrentCnt < FDepartingBranchesCnt then exit;
+  StartTime := Now();
+  MaxToken := FPrevLayer.Output.Size - 1;
+  for CntToken := 0 to MaxToken do
+  begin
+    CurrentToken := FInputTokens[CntToken];
+    SourcePtr := FOutputError.GetRawPtr(CntToken);
+    if FBatchUpdate
+      then DestPtr := LocalDelta.GetRawPtr(CurrentToken, 0, 0)
+      else DestPtr := LocalWeights.GetRawPtr(CurrentToken, 0, 0);
+    TNNetVolume.MulAdd(DestPtr, SourcePtr, FLearningRate, FEmbeddingSize);
+  end;
+  FBackwardTime := FBackwardTime + (Now() - StartTime);
+end;
+
+{ TNNetTokenAndPositionalEmbedding }
+
+procedure TNNetTokenAndPositionalEmbedding.SetPrevLayer(pPrevLayer: TNNetLayer);
+begin
+  inherited SetPrevLayer(pPrevLayer);
+  FPositionalEmbedding.ReSize(FOutput);
+  FPositionalEmbedding.PositionalEncoding(FEmbeddingSize);
+end;
+
+constructor TNNetTokenAndPositionalEmbedding.Create(pVocabSize,
+  pEmbeddingSize: integer; PositionalEmbeddingN: integer = 0);
+begin
+  inherited Create(pVocabSize, pEmbeddingSize);
+  FPositionalEmbedding := TNNetVolume.Create;
+  if PositionalEmbeddingN=0
+  then FPositionalEmbeddingN := 10000
+  else FPositionalEmbeddingN := PositionalEmbeddingN;
+  FStruct[2] := FPositionalEmbeddingN;
+end;
+
+destructor TNNetTokenAndPositionalEmbedding.Destroy;
+begin
+  FPositionalEmbedding.Free;
+  inherited Destroy;
+end;
+
+procedure TNNetTokenAndPositionalEmbedding.Compute();
+var
+  StartTime: double;
+begin
+  inherited Compute;
+  StartTime := Now();
+  FOutput.Add(FPositionalEmbedding);
+  FForwardTime := FForwardTime + (Now() - StartTime);
+end;
+
 procedure TNNetInputBase.Compute;
 begin
   FOutputError.Fill(0);
@@ -10676,25 +11495,36 @@ function TNNet.CreateLayer(strData: string): TNNetLayer;
 var
   S, S2: TStringList;
   St: array [0..csNNetMaxParameterIdx] of integer;
+  Ft: array [0..csNNetMaxParameterIdx] of TNeuralFloat;
   aL: array of TNNetLayer;
   aIdx: TNeuralIntegerArray;
   IdxCnt: integer;
   I: integer;
+  ClassNameStr: string;
+  SCount: integer;
 begin
   Result := nil;
   S := CreateTokenizedStringList(strData,':');
   S2 := CreateTokenizedStringList(strData,';');
 
-  if S.Count >= 2 then
+  SCount := S.Count;
+
+  if SCount >= 2 then
   begin
+    ClassNameStr := S[0];
+    // This code is good for debug
+    // if ClassNameStr = 'TNNetSum' then
+    // begin
+    //   WriteLn('hello');
+    // end;
+
     for I := Low(St) to High(St) do St[i] := 0;
     S2.DelimitedText := S[1];
     if S2.Count > 0 then
     begin
       for I := 0 to Min(S2.Count - 1, High(St)) do St[I] := StrToInt(S2[I]);
     end;
-
-    if S.Count = 3 then
+    if SCount >= 3 then
     begin
       S2.DelimitedText := S[2];
 
@@ -10715,13 +11545,30 @@ begin
       end;
     end;
 
+    if SCount >= 4 then
+    begin
+      for I := Low(Ft) to High(Ft) do Ft[i] := 0;
+      S2.DelimitedText := S[3];
+      if S2.Count > 0 then
+      begin
+        for I := 0 to Min(S2.Count - 1, High(St)) do Ft[I] := StrToFloat(S2[I], GetDefaultNumericFormat());
+      end;
+    end
+    else
+    // backward compatibility
+    begin
+      for I := Low(Ft) to High(Ft) do Ft[i] := St[i];
+    end;
+
     {$IFDEF FPC}
-    case S[0] of
+
+    case ClassNameStr of
       'TNNetInput' :                Result := TNNetInput.Create(St[0], St[1], St[2], St[3]);
       'TNNetIdentity' :             Result := TNNetIdentity.Create();
       'TNNetTransposeXD' :          Result := TNNetTransposeXD.Create();
       'TNNetTransposeYD' :          Result := TNNetTransposeYD.Create();
       'TNNetDebug' :                Result := TNNetDebug.Create(St[0], St[1]);
+      'TNNetDotProducts' :          Result := TNNetDotProducts.Create(St[0], St[1]);
       'TNNetPad' :                  Result := TNNetPad.Create(St[0]);
       'TNNetPadXY' :                Result := TNNetPadXY.Create(St[0], St[1]);
       'TNNetCrop' :                 Result := TNNetCrop.Create(St[0], St[1], St[2], St[3]);
@@ -10752,11 +11599,12 @@ begin
       'TNNetLocalConnect' :         Result := TNNetLocalConnect.Create(St[0], St[1], St[2], St[3], St[4]);
       'TNNetLocalProduct' :         Result := TNNetLocalProduct.Create(St[0], St[1], St[2], St[3], St[4]);
       'TNNetLocalConnectReLU' :     Result := TNNetLocalConnectReLU.Create(St[0], St[1], St[2], St[3], St[4]);
-      'TNNetMulLearning'  :         Result := TNNetMulLearning.Create(St[0]);
-      'TNNetMulByConstant'  :       Result := TNNetMulByConstant.Create(St[0]);
+      'TNNetMulLearning'  :         Result := TNNetMulLearning.Create(Ft[0]);
+      'TNNetMulByConstant'  :       Result := TNNetMulByConstant.Create(Ft[0]);
       'TNNetNegate'  :              Result := TNNetNegate.Create();
       'TNNetLayerSoftMax' :         Result := TNNetSoftMax.Create();
-      'TNNetSoftMax' :              Result := TNNetSoftMax.Create();
+      'TNNetSoftMax' :              Result := TNNetSoftMax.Create(St[0]);
+      'TNNetPointwiseSoftMax' :     Result := TNNetPointwiseSoftMax.Create();
       'TNNetConvolution' :          Result := TNNetConvolution.Create(St[0], St[1], St[2], St[3], St[4]);
       'TNNetConvolutionReLU' :      Result := TNNetConvolutionReLU.Create(St[0], St[1], St[2], St[3], St[4]);
       'TNNetConvolutionLinear' :    Result := TNNetConvolutionLinear.Create(St[0], St[1], St[2], St[3], St[4]);
@@ -10798,6 +11646,7 @@ begin
       'TNNetLayerMaxNormalization': Result := TNNetLayerMaxNormalization.Create();
       'TNNetLayerStdNormalization': Result := TNNetLayerStdNormalization.Create();
       'TNNetMovingStdNormalization': Result := TNNetMovingStdNormalization.Create();
+      'TNNetMovingScale':           Result := TNNetMovingScale.Create(Ft[0],Ft[1]);
       'TNNetChannelStdNormalization': Result := TNNetChannelStdNormalization.Create();
       'TNNetScaleLearning' :        Result := TNNetScaleLearning.Create();
       'TNNetChannelBias':           Result := TNNetChannelBias.Create();
@@ -10812,6 +11661,9 @@ begin
       'TNNetLocalResponseNorm2D':   Result := TNNetLocalResponseNorm2D.Create(St[0]);
       'TNNetLocalResponseNormDepth':Result := TNNetLocalResponseNormDepth.Create(St[0]);
       'TNNetAddAndDiv'             :Result := TNNetAddAndDiv.Create(St[0], St[1]);
+      'TNNetAddPositionalEmbedding':Result := TNNetAddPositionalEmbedding.Create(St[0]);
+      'TNNetEmbedding':             Result := TNNetEmbedding.Create(St[0], St[1]);
+      'TNNetTokenAndPositionalEmbedding':Result := TNNetTokenAndPositionalEmbedding.Create(St[0], St[1], St[2]);
     else
        raise Exception.create(strData + ' not allowed in CreateLayer.');
     end;
@@ -10821,6 +11673,7 @@ begin
       if S[0] = 'TNNetTransposeXD' then Result := TNNetTransposeXD.Create() else
       if S[0] = 'TNNetTransposeYD' then Result := TNNetTransposeYD.Create() else
       if S[0] = 'TNNetDebug' then Result := TNNetDebug.Create(St[0], St[1]) else
+      if S[0] = 'TNNetDotProducts' then Result := TNNetDotProducts.Create(St[0], St[1]) else
       if S[0] = 'TNNetPad' then Result := TNNetPad.Create(St[0]) else
       if S[0] = 'TNNetPadXY' then Result := TNNetPadXY.Create(St[0], St[1]) else
       if S[0] = 'TNNetCrop' then Result := TNNetCrop.Create(St[0], St[1], St[2], St[3]) else
@@ -10851,11 +11704,12 @@ begin
       if S[0] = 'TNNetLocalConnect' then Result := TNNetLocalConnect.Create(St[0], St[1], St[2], St[3], St[4]) else
       if S[0] = 'TNNetLocalProduct' then Result := TNNetLocalProduct.Create(St[0], St[1], St[2], St[3], St[4]) else
       if S[0] = 'TNNetLocalConnectReLU' then Result := TNNetLocalConnectReLU.Create(St[0], St[1], St[2], St[3], St[4]) else
-      if S[0] = 'TNNetMulLearning' then Result := TNNetMulLearning.Create(St[0]) else
-      if S[0] = 'TNNetMulByConstant' then Result := TNNetMulByConstant.Create(St[0]) else
+      if S[0] = 'TNNetMulLearning' then Result := TNNetMulLearning.Create(Ft[0]) else
+      if S[0] = 'TNNetMulByConstant' then Result := TNNetMulByConstant.Create(Ft[0]) else
       if S[0] = 'TNNetNegate' then Result := TNNetNegate.Create() else
       if S[0] = 'TNNetLayerSoftMax' then Result := TNNetSoftMax.Create() else
-      if S[0] = 'TNNetSoftMax' then Result := TNNetSoftMax.Create() else
+      if S[0] = 'TNNetSoftMax' then Result := TNNetSoftMax.Create(St[0]) else
+      if S[0] = 'TNNetPointwiseSoftMax' then Result := TNNetPointwiseSoftMax.Create() else
       if S[0] = 'TNNetConvolution' then Result := TNNetConvolution.Create(St[0], St[1], St[2], St[3], St[4]) else
       if S[0] = 'TNNetConvolutionReLU' then Result := TNNetConvolutionReLU.Create(St[0], St[1], St[2], St[3], St[4]) else
       if S[0] = 'TNNetConvolutionLinear' then Result := TNNetConvolutionLinear.Create(St[0], St[1], St[2], St[3], St[4]) else
@@ -10897,6 +11751,7 @@ begin
       if S[0] = 'TNNetLayerMaxNormalization' then Result := TNNetLayerMaxNormalization.Create() else
       if S[0] = 'TNNetLayerStdNormalization' then Result := TNNetLayerStdNormalization.Create() else
       if S[0] = 'TNNetMovingStdNormalization' then Result := TNNetMovingStdNormalization.Create() else
+      if S[0] = 'TNNetMovingScale' then Result := TNNetMovingScale.Create(Ft[0],Ft[1]) else
       if S[0] = 'TNNetChannelStdNormalization' then Result := TNNetChannelStdNormalization.Create() else
       if S[0] = 'TNNetScaleLearning' then Result := TNNetChannelStdNormalization.Create() else
       if S[0] = 'TNNetChannelBias' then Result := TNNetChannelBias.Create() else
@@ -10911,6 +11766,9 @@ begin
       if S[0] = 'TNNetLocalResponseNorm2D' then   Result := TNNetLocalResponseNorm2D.Create(St[0]) else
       if S[0] = 'TNNetLocalResponseNormDepth' then Result := TNNetLocalResponseNormDepth.Create(St[0]) else
       if S[0] = 'TNNetAddAndDiv' then Result := TNNetAddAndDiv.Create(St[0], St[1]) else
+      if S[0] = 'TNNetAddPositionalEmbedding' then Result := TNNetAddPositionalEmbedding.Create(St[0]) else
+      if S[0] = 'TNNetEmbedding' then Result := TNNetEmbedding.Create(St[0], St[1]) else
+      if S[0] = 'TNNetTokenAndPositionalEmbedding' then Result := TNNetTokenAndPositionalEmbedding.Create(St[0], St[1], St[2]) else
       raise Exception.create(strData + ' not allowed in CreateLayer.');
     {$ENDIF}
 
@@ -11050,6 +11908,65 @@ begin
         then AddLayerAfter( TNNetSplitChannelEvery.Create(Groups, GroupCnt), PreviousLayer)
         else AddLayerAfter( TNNetSplitChannels.Create(GroupCnt*InputChannelsPerGroup, InputChannelsPerGroup), PreviousLayer);
       EachGroupOutput[GroupCnt] := AddLayer( Conv2d.Create(FeaturesPerGroup, pFeatureSize, {pInputPadding=}0, pStride, pSuppressBias) );
+    end;
+    Result := AddLayer( TNNetDeepConcat.Create(EachGroupOutput) );
+  end;
+  SetLength(EachGroupOutput, 0);
+end;
+
+function TNNet.AddGroupedDotProducts(A, B: TNNetLayer; Groups: integer; ChannelInterleaving: boolean): TNNetLayer;
+var
+  PreviousLayer: TNNetLayer;
+  InputChannelsPerGroup: integer;
+  EachGroupOutput: array of TNNetLayer;
+  GroupCnt: integer;
+begin
+  PreviousLayer := GetLastLayer();
+  Result := PreviousLayer;
+  SetLength(EachGroupOutput, Groups);
+  InputChannelsPerGroup := PreviousLayer.FOutput.Depth div Groups;
+  if Groups = 1 then
+  begin
+    Result := AddLayer( TNNetDotProducts.Create(A, B) );
+  end;
+  if Groups > 1 then
+  begin
+    for GroupCnt := 0 to Groups - 1 do
+    begin
+      if ChannelInterleaving
+        then AddLayerAfter( TNNetSplitChannelEvery.Create(Groups, GroupCnt), PreviousLayer)
+        else AddLayerAfter( TNNetSplitChannels.Create(GroupCnt*InputChannelsPerGroup, InputChannelsPerGroup), PreviousLayer);
+      EachGroupOutput[GroupCnt] := AddLayer( TNNetDotProducts.Create(A, B) );
+    end;
+    Result := AddLayer( TNNetDeepConcat.Create(EachGroupOutput) );
+  end;
+  SetLength(EachGroupOutput, 0);
+end;
+
+function TNNet.AddGroupedPointwiseSoftMax(Groups: integer;
+  ChannelInterleaving: boolean): TNNetLayer;
+var
+  PreviousLayer: TNNetLayer;
+  InputChannelsPerGroup: integer;
+  EachGroupOutput: array of TNNetLayer;
+  GroupCnt: integer;
+begin
+  PreviousLayer := GetLastLayer();
+  Result := PreviousLayer;
+  SetLength(EachGroupOutput, Groups);
+  InputChannelsPerGroup := PreviousLayer.FOutput.Depth div Groups;
+  if Groups = 1 then
+  begin
+    Result := AddLayer( TNNetPointwiseSoftMax.Create() );
+  end;
+  if Groups > 1 then
+  begin
+    for GroupCnt := 0 to Groups - 1 do
+    begin
+      if ChannelInterleaving
+        then AddLayerAfter( TNNetSplitChannelEvery.Create(Groups, GroupCnt), PreviousLayer)
+        else AddLayerAfter( TNNetSplitChannels.Create(GroupCnt*InputChannelsPerGroup, InputChannelsPerGroup), PreviousLayer);
+      EachGroupOutput[GroupCnt] := AddLayer( TNNetPointwiseSoftMax.Create() );
     end;
     Result := AddLayer( TNNetDeepConcat.Create(EachGroupOutput) );
   end;
@@ -13745,6 +14662,14 @@ begin
   begin
     if I > 0 then Result := Result + ';';
     Result := Result + IntToStr(FStruct[I]);
+  end;
+
+  Result := Result + '::';
+
+  for I := Low(FFloatSt) to High(FFloatSt) do
+  begin
+    if I > 0 then Result := Result + ';';
+    Result := Result + FloatToStr(FFloatSt[I], GetDefaultNumericFormat);
   end;
 end;
 
