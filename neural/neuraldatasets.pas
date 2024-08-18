@@ -306,6 +306,9 @@ function RemoveRandomWord(const Str: string): string;
 
 type TNNetAAInteger = array of array of integer;
 
+procedure FilterCSVWithNumbersUpToMax(inputFile,outputFile: string;
+  MaxInteger: integer; MaxRows: integer = 0);
+
 procedure LoadIntegersInCSV(filename: string;
   var aTokens: TNNetAAInteger; MaxRows: integer = 0);
 
@@ -459,7 +462,7 @@ var
   InputVolume, OutputVolume: TNNetVolume;
   NextTokenInt: integer;
   NextTokenStr: string;
-  Tokens: array of integer;
+  Tokens: TNeuralIntegerArray;
   TokenCnt: integer;
 begin
   InputVolume := TNNetVolume.Create(NN.GetFirstLayer.Output);
@@ -494,7 +497,7 @@ var
   InputVolume, OutputVolume: TNNetVolume;
   NextTokenInt: integer;
   NextTokenStr: string;
-  Tokens: array of integer;
+  Tokens: TNeuralIntegerArray;
   TokenCnt: integer;
 begin
   InputVolume := TNNetVolume.Create(NN.GetFirstLayer.Output);
@@ -530,7 +533,7 @@ var
   SampleLen: integer;
   SampleCutPosition: integer;
   ExpectedTokenInt: integer;
-  AIntegerArray: array of integer;
+  AIntegerArray: TNeuralIntegerArray;
   pInput, pOutput: TNNetVolume;
   CntHit, CntMiss: integer;
   InputString: string;
@@ -550,7 +553,11 @@ begin
     // The expected token is the next character in the string
     ExpectedTokenInt := Dataset[SampleId][SampleCutPosition];
     // Encode the input and output volumes
+    {$IFDEF FPC}
     AIntegerArray := Copy(Dataset[SampleId], 0, SampleCutPosition);
+    {$ELSE}
+    //TODO: fix this
+    {$ENDIF}
     pInput.Fill(0);
     pInput.CopyReversedNoChecksIntArr( AIntegerArray );
     NN.Compute(pInput, pOutput);
@@ -1936,6 +1943,43 @@ begin
   end;
   // Free the TStringList to prevent memory leaks.
   WordList.Free;
+end;
+
+procedure FilterCSVWithNumbersUpToMax(inputFile,outputFile: string; MaxInteger: integer; MaxRows: integer = 0);
+var
+  LargeFileIn, LargeFileOut: TextFile;
+  StrLine: string;
+  MaxValue, RowCnt, WordCnt: integer;
+  Separator: TNNetStringList;
+begin
+  Separator := CreateTokenizedStringList(',');
+  RowCnt := 0;
+  //WriteLn('Counting rows from: ', filename);
+  AssignFile(LargeFileIn, inputFile);
+  AssignFile(LargeFileOut, outputFile);
+  Reset(LargeFileIn);
+  Rewrite(LargeFileOut);
+  while (not Eof(LargeFileIn)) and ( (MaxRows=0) or (RowCnt<MaxRows) ) do
+  begin
+    ReadLn(LargeFileIn, StrLine);
+    Separator.DelimitedText := StrLine;
+    if Separator.Count > 0 then
+    begin
+      MaxValue := 0;
+      for WordCnt := 0 to Separator.Count - 1 do
+      begin
+        MaxValue := Max(MaxValue, StrToInt(Separator[WordCnt]));
+        if MaxValue > MaxInteger then break;
+      end;
+      if MaxValue <= MaxInteger then
+      begin
+        RowCnt := RowCnt + 1;
+        WriteLn(LargeFileOut, StrLine);
+      end;
+    end;
+  end;
+  CloseFile(LargeFileIn);
+  CloseFile(LargeFileOut);
 end;
 
 procedure LoadIntegersInCSV(filename: string; var aTokens: TNNetAAInteger;

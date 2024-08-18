@@ -170,7 +170,8 @@ type
     procedure SetMax(Value: TNeuralFloat); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Mul(x, y, d: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Mul(Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
-    class procedure Mul(PtrA, PtrB: TNeuralFloatArrPtr; pSize: integer); overload; {$IFDEF Release} inline; {$ENDIF}
+    class procedure Mul(PtrA: TNeuralFloatArrPtr; MulOp: TNeuralFloat; pSize: integer); overload;
+    class procedure Mul(PtrA, PtrB: TNeuralFloatArrPtr; pSize: integer); overload;
     procedure Mul(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure MulAtDepth(pDepth: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Pow(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -187,6 +188,7 @@ type
     procedure Divi(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure ForceMinRange(Value: T); {$IFDEF Release} inline; {$ENDIF}
     procedure ForceMaxRange(Value: T); {$IFDEF Release} inline; {$ENDIF}
+    procedure ForceMaxMagnitude(Value: T); {$IFDEF Release} inline; {$ENDIF}
     procedure ForceMaxAbs(Value: T); {$IFDEF Release} inline; {$ENDIF}
     procedure ForcePositive(); {$IFDEF Release} inline; {$ENDIF}
     procedure Randomize(a:integer=10000; b:integer=5000; c:integer=5000); {$IFDEF Release} inline; {$ENDIF}
@@ -205,7 +207,7 @@ type
     procedure CopyPadding(Original: TVolume; PaddingX, PaddingY: integer); {$IFDEF Release} inline; {$ENDIF} overload;
     procedure CopyCropping(Original: TVolume; StartX, StartY, pSizeX, pSizeY: integer);
     procedure CopyResizing(Original: TVolume; NewSizeX, NewSizeY: integer);
-    procedure CopyNoChecks(Original: TVolume); {$IFDEF Release} inline; {$ENDIF}
+    procedure CopyNoChecks(Original: TVolume); overload;
     procedure CopyNoChecks(var Original: array of byte); overload;
     procedure CopyNoChecksIntArr(var Original: array of integer); overload;
     procedure CopyReversedNoChecksIntArr(var Original: array of integer); overload;
@@ -271,6 +273,7 @@ type
     procedure ZeroCenter();
 
     procedure Print();
+    procedure PrintXD(Digits:integer=9; Decimals: integer=5);
     procedure PrintWithIndex();
     procedure PrintDebug();
     procedure PrintDebugChannel();
@@ -290,7 +293,7 @@ type
 
     // bit operations
     procedure CopyAsBits(var Original: array of byte; pFalse: T = -0.5; pTrue: T = +0.5; CanResize: boolean = True); overload;
-    procedure CopyAsBits(Original: string; pFalse: T = -0.5; pTrue: T = +0.5; CanResize: boolean = True);
+    procedure CopyAsBits(Original: string; pFalse: T = -0.5; pTrue: T = +0.5; CanResize: boolean = True); overload;
     procedure CopyAsBitsReversed(Original: string; pFalse: T = -0.5; pTrue: T = +0.5);
     procedure ReadAsBits(var Dest: array of byte; Threshold: T = 0.0);
 
@@ -310,6 +313,8 @@ type
     // Encoding Functions
     procedure OneHotEncoding(aTokens: array of integer); overload;
     procedure GroupedOneHotEncoding(aTokens: array of integer; Groups: integer); overload;
+    procedure ReverseGroupedOneHotEncoding(out aTokens: TNeuralIntegerArray; Groups: integer);
+    function ReverseGroupedOneHotEncodingOnPixel(Groups, X, Y: integer):integer;
     procedure OneHotEncoding(aTokens: string); overload;
     procedure OneHotEncodingReversed(aTokens: string); overload;
     procedure OneHotEncodingReversed(var aTokens: array of integer); overload;
@@ -413,6 +418,8 @@ type
       procedure DotProductsPointwise(VAs, VBs: TNNetVolume; NoForward:boolean = false);
       procedure DotProductsTiled(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
       procedure GroupedDotProductsTiled(Groups, NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
+      procedure PointwiseNorm(pNorms: TNNetVolume = nil);
+      procedure PointwiseMul(pNorms: TNNetVolume);
       procedure AddArea(DestX, DestY, OriginX, OriginY, LenX, LenY: integer; Original: TNNetVolume);
       function HasAVX: boolean; {$IFDEF Release} inline; {$ENDIF}
       function HasAVX2: boolean; {$IFDEF Release} inline; {$ENDIF}
@@ -446,6 +453,7 @@ type
       function DotProduct(Original: TNNetVolume): TNeuralFloat; overload; {$IFDEF Release} inline; {$ENDIF}
       class function DotProduct(PtrA, PtrB: TNeuralFloatArrPtr; NumElements: integer): Single; overload; {$IFDEF Release} inline; {$ENDIF}
       procedure Mul(Value: Single); overload; {$IFDEF Release} inline; {$ENDIF}
+      class procedure Mul(PtrA: TNeuralFloatArrPtr; MulOp: TNeuralFloat; pSize: integer); overload;
       class procedure Mul(PtrA, PtrB: TNeuralFloatArrPtr; pSize: integer); overload; {$IFDEF Release} inline; {$ENDIF}
       procedure MulAdd(Value: TNeuralFloat; Original: TNNetVolume); overload; {$IFDEF Release} inline; {$ENDIF}
       procedure MulAdd(Original1, Original2: TNNetVolume); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -1902,69 +1910,6 @@ begin
   Result := Origin.GetClass();
 end;
 
-{ TStringStringList }
-
-procedure TStringStringList.LoadFromCsv(filename: string;
-  SkipFirstLine:boolean = true;
-  KeyId: integer = -1;
-  Separator: char = ',');
-var
-  Sep: TStringList;
-  CurrentLine: string;
-  KeyStr: string;
-  FileHandler: TextFile;
-  LineCnt: integer;
-begin
-  Self.Sorted := false;
-  Self.SortedList := false;
-  AssignFile(FileHandler, filename);
-  Reset(FileHandler);
-  LineCnt := 0;
-  while (not Eof(FileHandler)) do // and (LineCnt<10000)
-  begin
-    ReadLn(FileHandler, CurrentLine);
-    if not( (LineCnt = 0) and (SkipFirstLine) ) then
-    begin
-      Sep := CreateTokenizedStringList(Separator);
-      Sep.DelimitedText := CurrentLine;
-      if (KeyId = -1) then
-      begin
-        KeyStr := IntToStr(LineCnt);
-      end
-      else
-      begin
-        KeyStr := Sep[KeyId];
-      end;
-      AddObject(KeyStr, TObject(Sep));
-    end;
-    LineCnt := LineCnt + 1;
-    // debug line only:
-    //if LineCnt mod 100000 = 0 then WriteLn(LineCnt);
-  end;
-  CloseFile(FileHandler);
-end;
-
-procedure TStringStringList.SaveToCsv(filename: string;
-  Separator: char = ',');
-var
-  RowCnt: integer;
-  MaxCnt: integer;
-  FileHandler: TextFile;
-begin
-  MaxCnt := Count - 1;
-  if MaxCnt > -1 then
-  begin
-    AssignFile(FileHandler, filename);
-    ReWrite(FileHandler);
-    for RowCnt := 0 to MaxCnt do
-    begin
-      List[RowCnt].Delimiter := Separator;
-      WriteLn(FileHandler, List[RowCnt].DelimitedText);
-    end;
-    CloseFile(FileHandler);
-  end;
-end;
-
 { TStringVolumeList }
 
 function TStringVolumeList.CreateNonZeroPositionLists: TStringIntegerList;
@@ -2083,6 +2028,7 @@ end;
 
 // This function was coded by chatGPT4.
 function TNNetStringList.GetDelimitedTextFast: string;
+{$IFDEF FPC}
 var
   I: Integer;
   S: String;
@@ -2125,6 +2071,11 @@ begin
     StringBuilder.Free;
   end;
 end;
+{$ELSE}
+begin
+  Result := DelimitedText;
+end;
+{$ENDIF}
 
 procedure TNNetStringList.LoadLargeFile(Filename: string);
 var
@@ -2196,6 +2147,70 @@ procedure TStringsObj.AddStringObj(const S: string);
 begin
   Self.AddObject(S, TObj.Create);
 end;
+
+{ TStringStringList }
+
+procedure TStringStringList.LoadFromCsv(filename: string;
+  SkipFirstLine:boolean = true;
+  KeyId: integer = -1;
+  Separator: char = ',');
+var
+  Sep: TStringList;
+  CurrentLine: string;
+  KeyStr: string;
+  FileHandler: TextFile;
+  LineCnt: integer;
+begin
+  Self.Sorted := false;
+  Self.SortedList := false;
+  AssignFile(FileHandler, filename);
+  Reset(FileHandler);
+  LineCnt := 0;
+  while (not Eof(FileHandler)) do // and (LineCnt<10000)
+  begin
+    ReadLn(FileHandler, CurrentLine);
+    if not( (LineCnt = 0) and (SkipFirstLine) ) then
+    begin
+      Sep := CreateTokenizedStringList(Separator);
+      Sep.DelimitedText := CurrentLine;
+      if (KeyId = -1) then
+      begin
+        KeyStr := IntToStr(LineCnt);
+      end
+      else
+      begin
+        KeyStr := Sep[KeyId];
+      end;
+      AddObject(KeyStr, TObject(Sep));
+    end;
+    LineCnt := LineCnt + 1;
+    // debug line only:
+    //if LineCnt mod 100000 = 0 then WriteLn(LineCnt);
+  end;
+  CloseFile(FileHandler);
+end;
+
+procedure TStringStringList.SaveToCsv(filename: string;
+  Separator: char = ',');
+var
+  RowCnt: integer;
+  MaxCnt: integer;
+  FileHandler: TextFile;
+begin
+  MaxCnt := Count - 1;
+  if MaxCnt > -1 then
+  begin
+    AssignFile(FileHandler, filename);
+    ReWrite(FileHandler);
+    for RowCnt := 0 to MaxCnt do
+    begin
+      List[RowCnt].Delimiter := Separator;
+      WriteLn(FileHandler, List[RowCnt].DelimitedText);
+    end;
+    CloseFile(FileHandler);
+  end;
+end;
+
 {$ELSE}
 function TStringsObj.GetList(Index: Integer): TObject;
 begin
@@ -3995,6 +4010,21 @@ begin
     {$ENDIF}
 end;
 
+class procedure TVolume.Mul(PtrA: TNeuralFloatArrPtr; MulOp: TNeuralFloat;
+  pSize: integer);
+var
+  I: integer;
+  vHigh: integer;
+begin
+  vHigh := pSize - 1;
+  for I := 0 to vHigh do
+    {$IFDEF FPC}
+    PtrA^[I] *= MulOp;
+    {$ELSE}
+    PtrA^[I] := PtrA^[I] * MulOp;
+    {$ENDIF}
+end;
+
 class procedure TVolume.Mul(PtrA, PtrB: TNeuralFloatArrPtr; pSize: integer);
 var
   I: integer;
@@ -4301,6 +4331,14 @@ begin
   vHigh := High(FData);
   for I := 0 to vHigh do
     FData[I] := NeuronForceRange(FData[I], Value);
+end;
+
+procedure TVolume.ForceMaxMagnitude(Value: T);
+var
+  VNorm: Single;
+begin
+  VNorm := GetMagnitude();
+  if VNorm > Value then Mul(Value/VNorm);
 end;
 
 procedure TVolume.ForceMaxAbs(Value: T);
@@ -5221,16 +5259,18 @@ begin
   begin
     auxSingle := FData[0];
     FLastPos := 0;
-    Result := Abs(auxSingle);
+    Result := auxSingle;
+    if auxSingle < 0 then auxSingle := -auxSingle;
     vHigh := High(FData);
     if vHigh > 0 then
     begin
       for I := 1 to vHigh do
       begin
         auxSingle := FData[I];
-        if Abs(auxSingle) > Result then
+        if auxSingle < 0 then auxSingle := -auxSingle;
+        if auxSingle > Result then
         begin
-          Result := Abs(auxSingle);
+          Result := auxSingle;
           FLastPos := I;
         end;
       end;
@@ -5849,8 +5889,8 @@ var
   Pos: integer;
   Value: T;
 begin
-  vHigh := Depth;
-  if (vHigh>0) then
+  vHigh := Depth - 1;
+  if (vHigh>=0) then
   begin
     Result := 0;
     Pos := GetRawPos(X, Y);
@@ -5971,6 +6011,60 @@ begin
   end;
 end;
 
+procedure TNNetVolume.PointwiseNorm(pNorms: TNNetVolume = nil);
+var
+  StartPointPtr: pointer;
+  MaxX, MaxY: integer;
+  CountX, CountY: integer;
+  Modulus, Multiplier: TNeuralFloat;
+begin
+  if Assigned(pNorms) then
+  begin
+    pNorms.ReSize(SizeX, SizeY, 1);
+    pNorms.Fill(1);
+  end;
+  MaxX := FSizeX - 1;
+  MaxY := FSizeY - 1;
+  for CountX := 0 to MaxX do
+  begin
+    for CountY := 0 to MaxY do
+    begin
+      StartPointPtr := GetRawPtr(CountX, CountY);
+      Modulus := Sqrt(DotProduct(StartPointPtr, StartPointPtr, FDepth));
+      if Modulus > 0 then
+      begin
+        Multiplier := 1/Modulus;
+        if Assigned(pNorms) then pNorms[CountX, CountY, 0] := Multiplier;
+        Mul(StartPointPtr, Multiplier, FDepth);
+      end;
+    end;
+  end;
+end;
+
+procedure TNNetVolume.PointwiseMul(pNorms: TNNetVolume);
+var
+  StartPointPtr: pointer;
+  MaxX, MaxY: integer;
+  CountX, CountY: integer;
+  Modulus: TNeuralFloat;
+begin
+  if Assigned(pNorms) then pNorms.ReSize(SizeX, SizeY, 1);
+  MaxX := FSizeX - 1;
+  MaxY := FSizeY - 1;
+  for CountX := 0 to MaxX do
+  begin
+    for CountY := 0 to MaxY do
+    begin
+      StartPointPtr := GetRawPtr(CountX, CountY);
+      Modulus := pNorms[CountX, CountY, 0];
+      if Modulus <> 1 then
+      begin
+        Mul(StartPointPtr, Modulus, FDepth);
+      end;
+    end;
+  end;
+end;
+
 procedure TVolume.GroupedPointwiseSoftMax(Groups: integer);
 var
   I, StartPointPos: integer;
@@ -6069,18 +6163,18 @@ procedure TVolume.GroupedOneHotEncoding(aTokens: array of integer;
   Groups: integer);
 var
   CntToken, MaxToken, Token: integer;
-  GroupSize, GroupCnt, TokenPos, TokenMod, TokenDiv: integer;
+  GroupSize, GroupCnt, MaxGroup, TokenPos, TokenMod, TokenDiv: integer;
 begin
   MaxToken := Length(aTokens) - 1;
   GroupSize := FDepth div Groups;
+  MaxGroup := Groups - 1;
   Self.Fill(0);
   if MaxToken <= SizeX then
   begin
     for CntToken := 0 to MaxToken do
     begin
       Token := aTokens[CntToken];
-      GroupCnt := 0;
-      while (Token > 0) do
+      for GroupCnt := 0 to MaxGroup do
       begin
         TokenDiv := Token div GroupSize;
         TokenMod := Token mod GroupSize;
@@ -6096,7 +6190,6 @@ begin
             '.');
         end;
         Token := TokenDiv;
-        GroupCnt := GroupCnt + 1;
       end;
     end;
   end
@@ -6104,6 +6197,99 @@ begin
   begin
     WriteLn('Token length '+IntToStr(MaxToken + 1)+' is bigger than Size X '+IntToStr(SizeX)+' at GroupedOneHotEncoding.');
   end;
+end;
+
+procedure TVolume.ReverseGroupedOneHotEncoding(out aTokens: TNeuralIntegerArray; Groups: integer);
+var
+  CntToken, MaxToken, Token: integer;
+  GroupSize, MaxGroupSize, GroupCnt, MaxGroup, TokenMod: integer;
+  GroupSizePower: integer;
+  InitTokenPos: integer;
+  RawTokenPos: integer;
+  MaxValue: TNeuralFloat;
+  MaxTokenMod: integer;
+begin
+  // Calculate maximum token index
+  MaxToken := FSizeX - 1;
+  // Calculate size of each group
+  GroupSize := FDepth div Groups;
+  MaxGroupSize := GroupSize - 1;
+  // Calculate maximum group index
+  MaxGroup := Groups - 1;
+  // Initialize the tokens array with zeros
+  SetLength(aTokens, FSizeX);
+  for CntToken := 0 to MaxToken do
+    aTokens[CntToken] := 0;
+  // Iterate through the volume data to reconstruct tokens
+  for CntToken := 0 to MaxToken do
+  begin
+    Token := 0;
+    GroupSizePower := 1;
+    for GroupCnt := 0 to MaxGroup do
+    begin
+      InitTokenPos := GroupCnt * GroupSize;
+      RawTokenPos := GetRawPos(CntToken, 0, InitTokenPos);
+      MaxValue := FData[RawTokenPos];
+      MaxTokenMod := 0;
+      // Calculate the position within the group
+      for TokenMod := 1 to MaxGroupSize do
+      begin
+        if FData[RawTokenPos + TokenMod] > MaxValue then
+        begin
+          MaxValue := FData[RawTokenPos + TokenMod];
+          MaxTokenMod := TokenMod;
+        end;
+      end;
+      // Reconstruct the token by reversing the modulus and division
+      Token := Token + MaxTokenMod * GroupSizePower;
+      GroupSizePower := GroupSizePower * GroupSize;
+    end;
+    // Store the reconstructed token
+    aTokens[CntToken] := Token;
+  end;
+end;
+
+function TVolume.ReverseGroupedOneHotEncodingOnPixel(Groups, X, Y: integer): integer;
+var
+  CntToken, MaxToken, Token: integer;
+  GroupSize, MaxGroupSize, GroupCnt, MaxGroup, TokenMod: integer;
+  GroupSizePower: integer;
+  InitTokenPos: integer;
+  RawTokenPos: integer;
+  MaxValue: TNeuralFloat;
+  MaxTokenMod: integer;
+begin
+  // Calculate maximum token index
+  MaxToken := FSizeX - 1;
+  // Calculate size of each group
+  GroupSize := FDepth div Groups;
+  MaxGroupSize := GroupSize - 1;
+  // Calculate maximum group index
+  MaxGroup := Groups - 1;
+  begin
+    Token := 0;
+    GroupSizePower := 1;
+    for GroupCnt := 0 to MaxGroup do
+    begin
+      InitTokenPos := GroupCnt * GroupSize;
+      RawTokenPos := GetRawPos(X, Y, InitTokenPos);
+      MaxValue := FData[RawTokenPos];
+      MaxTokenMod := 0;
+      // Calculate the position within the group
+      for TokenMod := 1 to MaxGroupSize do
+      begin
+        if FData[RawTokenPos + TokenMod] > MaxValue then
+        begin
+          MaxValue := FData[RawTokenPos + TokenMod];
+          MaxTokenMod := TokenMod;
+        end;
+      end;
+      // Reconstruct the token by reversing the modulus and division
+      Token := Token + MaxTokenMod * GroupSizePower;
+      GroupSizePower := GroupSizePower * GroupSize;
+    end;
+  end;
+  Result := Token;
 end;
 
 procedure TVolume.OneHotEncoding(aTokens: string);
@@ -6529,6 +6715,22 @@ begin
     Write(FloatToStr(AuxData), ' ');
   end;
   WriteLn;
+end;
+
+procedure TVolume.PrintXD(Digits: integer; Decimals: integer);
+var
+  CX, CD: integer;
+  AUX: TNeuralFloat;
+begin
+  for CD := 0 to Depth - 1 do
+  begin
+    for CX := 0 to SizeX - 1 do
+    begin
+      AUX := Self[CX, 0, CD];
+      Write(AUX:Digits:Decimals);
+    end;
+    WriteLn;
+  end;
 end;
 
 procedure TVolume.PrintWithIndex();
@@ -8015,6 +8217,11 @@ end;
 
 procedure TNNetVolume.Mul(Original: TNNetVolume);
 begin
+  {$IFDEF Debug}
+  if Original.Size <> Self.Size then
+    raise Exception.Create('Sizes don''t match at TNNetVolume.Mul: ' +
+      IntToStr(Self.Size) + ' and ' + IntToStr(Original.Size) + ' .');
+  {$ENDIF}
   Mul(FDataPtr, Original.DataPtr, Size);
 end;
 
@@ -10807,18 +11014,12 @@ begin
 end;
 
 function TNNetVolume.GetSumSqr(): TNeuralFloat;
-var
-  I: integer;
-  vHigh: integer;
 begin
   if FSize >= csMinAvxSize
     then Result := AVXGetSumSqr(FDataPtr, FSize)
     else
     begin
-      Result := 0;
-      vHigh := High(FData);
-      for I := 0 to vHigh do
-        Result += Sqr(FData[I]);
+      Result := DotProduct(Self);
     end;
 end;
 
@@ -10906,6 +11107,12 @@ begin
     end;
 end;
 
+class procedure TNNetVolume.Mul(PtrA: TNeuralFloatArrPtr; MulOp: TNeuralFloat;
+  pSize: integer);
+begin
+  AVXMul(PtrA, MulOp, pSize);
+end;
+
 class procedure TNNetVolume.Mul(PtrA, PtrB: TNeuralFloatArrPtr; pSize: integer);
 begin
   AVXMul(PtrA, PtrB, pSize);
@@ -10913,6 +11120,15 @@ end;
 
 procedure TNNetVolume.MulAdd(Value: TNeuralFloat; Original: TNNetVolume);
 begin
+  {$IFDEF Debug}
+  if (Original.Size <> Self.Size) then
+  begin
+    raise Exception.Create('Sizes don''t match at MulAdd: ' +
+      IntToStr(Self.Size) + ' and ' +
+      IntToStr(Original.Size) +
+      '.');
+  end;
+  {$ENDIF}
   AVXMulAdd(FDataPtr, Original.FDataPtr, Value, FSize);
 end;
 
@@ -10925,7 +11141,7 @@ begin
       IntToStr(Self.Size) + ', ' +
       IntToStr(Original1.Size) + ' and ' +
       IntToStr(Original2.Size) +
-      ' .');
+      '.');
   end;
   {$ENDIF}
   AVXMulAdd(FDataPtr, Original1.DataPtr, Original2.DataPtr, FSize);
@@ -10934,6 +11150,11 @@ end;
 procedure TNNetVolume.MulMulAdd(Value1, Value2: TNeuralFloat;
   Original: TNNetVolume);
 begin
+  {$IFDEF Debug}
+  if Original.Size <> Self.Size then
+    raise Exception.Create('Sizes don''t match at TNNetVolume.MulMulAdd: ' +
+      IntToStr(Self.Size) + ' and ' + IntToStr(Original.Size) + '.');
+  {$ENDIF}
   AVXMulMulAdd(FDataPtr, Original.FDataPtr, Value1, Value2, FSize);
 end;
 
@@ -11080,6 +11301,11 @@ var
   SourceRawPos, DestRawPos: pointer;
   RowSize: integer;
 begin
+  {$IFDEF Debug}
+  if Original.Size <> Self.Size then
+    raise Exception.Create('Sizes don''t match at TNNetVolume.CopyNoChecks: ' +
+      IntToStr(Self.Size) + ' and ' + IntToStr(Original.Size) + ' .');
+  {$ENDIF}
   RowSize := Size;
   SourceRawPos := Addr(Original.FData[0]);
   DestRawPos := Addr(FData[0]);
