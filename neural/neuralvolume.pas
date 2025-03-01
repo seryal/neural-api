@@ -175,6 +175,7 @@ type
     procedure Mul(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure MulAtDepth(pDepth: integer; Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure Pow(Value: T); overload; {$IFDEF Release} inline; {$ENDIF}
+    procedure PowMinus1();
     procedure VSqrt(); {$IFDEF Release} inline; {$ENDIF}
     procedure MulAdd(Value: T; Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
     procedure MulMulAdd(Value1, Value2: T; Original: TVolume); overload; {$IFDEF Release} inline; {$ENDIF}
@@ -203,8 +204,8 @@ type
     procedure Copy(var Original: array of T); overload;
     procedure Copy(var Original: array of byte); overload;
     procedure Copy(Original: TBits; pFlase: T = -0.5; pTrue: T = +0.5); overload;
-    procedure CopyPadding(Original: TVolume; Padding: integer); {$IFDEF Release} inline; {$ENDIF} overload;
-    procedure CopyPadding(Original: TVolume; PaddingX, PaddingY: integer); {$IFDEF Release} inline; {$ENDIF} overload;
+    procedure CopyPadding(Original: TVolume; Padding: integer); overload;
+    procedure CopyPadding(Original: TVolume; PaddingX, PaddingY: integer); overload;
     procedure CopyCropping(Original: TVolume; StartX, StartY, pSizeX, pSizeY: integer);
     procedure CopyResizing(Original: TVolume; NewSizeX, NewSizeY: integer);
     procedure CopyNoChecks(Original: TVolume); overload;
@@ -316,6 +317,7 @@ type
     procedure ReverseGroupedOneHotEncoding(out aTokens: TNeuralIntegerArray; Groups: integer);
     function ReverseGroupedOneHotEncodingOnPixel(Groups, X, Y: integer):integer;
     procedure OneHotEncoding(aTokens: string); overload;
+    procedure OneHotEncodingAtEnd(aTokens: string); overload;
     procedure OneHotEncodingReversed(aTokens: string); overload;
     procedure OneHotEncodingReversed(var aTokens: array of integer); overload;
     // Sets positional embedding as per paper "Attention Is All You Need".
@@ -350,11 +352,19 @@ type
   end;
 
   TNNetToken = record
-    Token: Integer;
+    Token: integer;
     Score: TNeuralFloat;
   end;
 
+  TNNetGroupInfo = record
+    GroupId: integer;
+    GroupIdVectorSize: integer;
+    PtrA: TNeuralFloatArrPtr;
+  end;
+
   TNNetTokenArray = array of TNNetToken;
+
+  TNNetGroupInfoArray = array of TNNetGroupInfo;
 
   { TNNetVolume }
   {$IFDEF FPC}
@@ -370,6 +380,7 @@ type
       procedure CalculateLocalResponseFrom2D(Original: TNNetVolume; pSize:integer; alpha, beta: TNeuralFloat );
       procedure CalculateLocalResponseFromDepth(Original: TNNetVolume; pSize:integer; alpha, beta: TNeuralFloat );
       procedure GetTokenArray(var TokenArray: TNNetTokenArray);
+      procedure GetTokenArrayOnPixel(var TokenArray: TNNetTokenArray; X,Y: integer);
       (*
       Assume that "As" and "Bs" contain lists of vectors "A" and "B".
       "NumAs and NumBs" are the number of elements in the
@@ -417,7 +428,6 @@ type
       procedure DotProducts(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; NoForward:boolean = false);
       procedure DotProductsPointwise(VAs, VBs: TNNetVolume; NoForward:boolean = false);
       procedure DotProductsTiled(NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
-      procedure GroupedDotProductsTiled(Groups, NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
       procedure PointwiseNorm(pNorms: TNNetVolume = nil);
       procedure PointwiseMul(pNorms: TNNetVolume);
       procedure AddArea(DestX, DestY, OriginX, OriginY, LenX, LenY: integer; Original: TNNetVolume);
@@ -477,6 +487,16 @@ type
       DataPtr: TNeuralFloatArrPtr read FDataPtr;
   end;
 
+  { TNNetGroupedVolume }
+
+  TNNetGroupedVolume = class(TNNetVolume)
+    protected
+      FGrInfoArray: TNNetGroupInfoArray;
+    public
+      destructor Destroy(); override;
+      procedure GroupedDotProductsTiled(Groups, NumAs, NumBs, VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
+  end;
+
   { TNNetSamplerBase }
 
   TNNetSamplerBase = class(TObject)
@@ -484,6 +504,7 @@ type
       FTokenArr: TNNetTokenArray;
     public
       function GetToken(Origin: TNNetVolume): integer; virtual; abstract;
+      function GetTokenOnPixel(Origin: TNNetVolume; PixelX, PixelY: integer): integer; virtual; abstract;
       procedure SortTokenArray();
       destructor Destroy(); override;
   end;
@@ -492,6 +513,7 @@ type
   TNNetSamplerGreedy = class (TNNetSamplerBase)
     public
       function GetToken(Origin: TNNetVolume): integer; override;
+      function GetTokenOnPixel(Origin: TNNetVolume; PixelX, PixelY: integer): integer; override;
   end;
 
   { TNNetSamplerTopK }
@@ -501,6 +523,7 @@ type
     public
       constructor Create(TopK: integer);
       function GetToken(Origin: TNNetVolume): integer; override;
+      function GetTokenOnPixel(Origin: TNNetVolume; PixelX, PixelY: integer): integer; override;
   end;
 
   { TNNetSamplerTopP }
@@ -510,8 +533,8 @@ type
     public
       constructor Create(TopP: TNeuralFloat);
       function GetToken(Origin: TNNetVolume): integer; override;
+      function GetTokenOnPixel(Origin: TNNetVolume; PixelX, PixelY: integer): integer; override;
   end;
-
 
   /// Implements a pair of volumes
   TNNetVolumePair = class(TObject)
@@ -655,6 +678,7 @@ type
     public
       constructor Create;
       destructor Destroy; override;
+      procedure LoadVocabularyFromFile(const filename: string);
 
       procedure SortByIntegerAsc;
       procedure SortByIntegerDesc;
@@ -662,11 +686,18 @@ type
       function WordToIndex(pWord:string): integer;
       function WordToInteger(pWord:string): integer;
       function IntegerToWord(pInteger: integer): string;
+      procedure SaveCurrentPosition();
       procedure SaveCurrentPositionAndSort();
       procedure StringToIndexArray(pString: string; var IntArr: TNeuralIntegerArray);
       procedure StringToIntegerArray(pString: string; var IntArr: TNeuralIntegerArray);
       function IndexArrayToString(var IntArr: TNeuralIntegerArray): string;
       function IntegerArrayToString(var IntArr: TNeuralIntegerArray): string;
+      function IntegerListToCsv(IL: TIntegerList; pDelimiter: char = ','): string;
+
+      function DeTokenize(TokenId: integer): string; virtual;
+      procedure Tokenize(pString: string; var IntArr: TNeuralIntegerArray); overload; virtual;
+      function GetVocabCount(): integer; virtual;
+      function TokenizerHasSeparator: boolean; virtual;
 
       property Integers[Index: Integer]: PtrInt read GetInteger write PutInteger;
   end;
@@ -783,6 +814,9 @@ type
   function CreateTokenizedStringList(str: string; c:char):TNNetStringList; overload;
   function CreateTokenizedStringList(c:char):TNNetStringList; overload;
 
+  function CreateQuotedTokenizedStringList(Str: string; Separator:char; QuoteChar: char):TNNetStringList; overload;
+  function CreateQuotedTokenizedStringList(Separator:char; QuoteChar: char):TNNetStringList; overload;
+
   function HiperbolicTangent(x: TNeuralFloat): TNeuralFloat;
   function HiperbolicTangentDerivative(x: TNeuralFloat): TNeuralFloat;
 
@@ -797,6 +831,9 @@ type
 
   function RectifiedLinearUnitLeaky(x: TNeuralFloat): TNeuralFloat;
   function RectifiedLinearUnitLeakyDerivative(x: TNeuralFloat): TNeuralFloat;
+
+  function SignedSquareRoot1(x: TNeuralFloat): TNeuralFloat;
+  function SignedSquareRoot1Derivative(x: TNeuralFloat): TNeuralFloat;
 
   function ReLULeakyBound(x: TNeuralFloat): TNeuralFloat;
   function ReLULeakyBoundDerivative(x: TNeuralFloat): TNeuralFloat;
@@ -879,6 +916,40 @@ begin
     else Result := 0.01;
 
   if x<-1 then Result := 0;
+end;
+
+function SignedSquareRoot1(x: TNeuralFloat): TNeuralFloat;
+begin
+  if x > 1 then
+  begin
+    Result := Sqrt(x);
+  end
+  else
+  if x < -1 then
+  begin
+    Result := Sqrt(-x);
+  end
+  else
+  begin
+    Result := x;
+  end;
+end;
+
+function SignedSquareRoot1Derivative(x: TNeuralFloat): TNeuralFloat;
+begin
+  if x > 1 then
+  begin
+    Result := 1/(2*Sqrt(x));
+  end
+  else
+  if x < -1 then
+  begin
+    Result := 1/(2*Sqrt(-x));
+  end
+  else
+  begin
+    Result := 1;
+  end;
 end;
 
 function ReLULeakyBound(x: TNeuralFloat): TNeuralFloat;
@@ -1489,13 +1560,14 @@ var
   I: integer;
   Result, Aux: TNeuralFloat;
   Min0, Max0, Min1, Max1, Min2, Max2: TNeuralFloat;
-  A, B, R: TNNetVolume;
+  A, B: TNNetVolume;
+  R: TNNetGroupedVolume;
 begin
   TestSize := 1+Random(2630);
   WriteLn(' TestTNNetVolume Testing size:', TestSize);
   A := TNNetVolume.Create(TestSize);
   B := TNNetVolume.Create(TestSize);
-  R := TNNetVolume.Create(TestSize);
+  R := TNNetGroupedVolume.Create(TestSize);
 
   A.Randomize();
   B.Randomize();
@@ -1742,6 +1814,18 @@ begin
   Result.DecimalSeparator := '.';
 end;
 
+function CreateQuotedTokenizedStringList(Str: string; Separator:char; QuoteChar: char): TNNetStringList;
+begin
+  Result := CreateQuotedTokenizedStringList(Separator, QuoteChar);
+  Result.DelimitedText := Str;
+end;
+
+function CreateQuotedTokenizedStringList(Separator:char; QuoteChar: char): TNNetStringList;
+begin
+  Result := CreateTokenizedStringList(Separator);
+  Result.QuoteChar := QuoteChar;
+end;
+
 function HiperbolicTangent(x: TNeuralFloat): TNeuralFloat;
 var
   exp2x: TNeuralFloat;
@@ -1875,6 +1959,33 @@ begin
     Result := FTokenArr[0].Token; // Fallback in case P is too low.
 end;
 
+function TNNetSamplerTopP.GetTokenOnPixel(Origin: TNNetVolume; PixelX,
+  PixelY: integer): integer;
+var
+  CumulativeSum: TNeuralFloat;
+  I, Threshold: Integer;
+begin
+  Origin.GetTokenArrayOnPixel(FTokenArr, PixelX, PixelY);
+  SortTokenArray();
+  CumulativeSum := 0;
+  Threshold := 0;
+  for I := Low(FTokenArr) to High(FTokenArr) do
+  begin
+    CumulativeSum := CumulativeSum + FTokenArr[i].Score;
+    if CumulativeSum > FTopP then
+    begin
+      Threshold := I;
+      Break;
+    end;
+  end;
+
+  // Randomly select one of the top tokens within the threshold.
+  if Threshold > 0 then
+    Result := FTokenArr[Random(Threshold)].Token
+  else
+    Result := FTokenArr[0].Token; // Fallback in case P is too low.
+end;
+
 { TNNetSamplerTopK }
 
 constructor TNNetSamplerTopK.Create(TopK: integer);
@@ -1886,6 +1997,14 @@ end;
 function TNNetSamplerTopK.GetToken(Origin: TNNetVolume): integer;
 begin
   Origin.GetTokenArray(FTokenArr);
+  SortTokenArray();
+  Result := FTokenArr[Random(FTopK)].Token;
+end;
+
+function TNNetSamplerTopK.GetTokenOnPixel(Origin: TNNetVolume; PixelX,
+  PixelY: integer): integer;
+begin
+  Origin.GetTokenArrayOnPixel(FTokenArr, PixelX, PixelY);
   SortTokenArray();
   Result := FTokenArr[Random(FTopK)].Token;
 end;
@@ -1908,6 +2027,12 @@ end;
 function TNNetSamplerGreedy.GetToken(Origin: TNNetVolume): integer;
 begin
   Result := Origin.GetClass();
+end;
+
+function TNNetSamplerGreedy.GetTokenOnPixel(Origin: TNNetVolume; PixelX,
+  PixelY: integer): integer;
+begin
+  Result := Origin.GetClassOnPixel(PixelX, PixelY);
 end;
 
 { TStringVolumeList }
@@ -2338,6 +2463,12 @@ begin
   inherited Destroy;
 end;
 
+procedure TStringListInt.LoadVocabularyFromFile(const filename: string);
+begin
+  Self.LoadFromFile(filename);
+  SaveCurrentPositionAndSort();
+end;
+
 procedure TStringListInt.SortByIntegerAsc;
 begin
   Sorted := false;
@@ -2396,6 +2527,7 @@ var
   WordCount: integer;
 begin
   Result := false;
+  FTokenizer.Delimiter := ' ';
   FTokenizer.DelimitedText := pString;
 
   if FTokenizer.Count > 0 then
@@ -2492,12 +2624,46 @@ begin
   Result := FIntegerToStr[pInteger];
 end;
 
+function TStringListInt.DeTokenize(TokenId: integer): string;
+begin
+  Result := IntegerToWord(TokenId);
+end;
+
+procedure TStringListInt.Tokenize(pString: string;
+  var IntArr: TNeuralIntegerArray);
+begin
+  StringToIntegerArray(pString, IntArr);
+end;
+
+function TStringListInt.GetVocabCount(): integer;
+begin
+  Result := Count;
+end;
+
+function TStringListInt.TokenizerHasSeparator: boolean;
+begin
+  Result := true;
+end;
+
+procedure TStringListInt.SaveCurrentPosition();
+var
+  RowCnt: integer;
+begin
+  SetLength(FIntegerToStr, Self.Count);
+  for RowCnt := 0 to Self.Count - 1 do
+  begin
+    Self.Integers[RowCnt] := RowCnt;
+    FIntegerToStr[RowCnt] := Self[RowCnt];
+  end;
+end;
+
 procedure TStringListInt.StringToIndexArray(pString: string;
   var IntArr: TNeuralIntegerArray);
 var
   WordCount: integer;
   WordIndex: integer;
 begin
+  FTokenizer.Delimiter := ' ';
   FTokenizer.DelimitedText := pString;
 
   if FTokenizer.Count > 0 then
@@ -2521,6 +2687,7 @@ var
   WordCount: integer;
   WordInteger: integer;
 begin
+  FTokenizer.Delimiter := ' ';
   FTokenizer.DelimitedText := pString;
 
   if FTokenizer.Count > 0 then
@@ -2544,7 +2711,8 @@ var
   WordCount, WordMax: integer;
   WordIndex: integer;
 begin
-  Result := '';
+  FTokenizer.Clear;
+  FTokenizer.Delimiter := ' ';
   WordMax := Length(IntArr) - 1;
   if WordMax >= 0 then
   begin
@@ -2554,10 +2722,11 @@ begin
       //WriteLn(WordIndex,':',FTokenizer[WordCount]);
       if WordIndex >= 0 then
       begin
-        Result := Result + Self[WordIndex];
+        FTokenizer.Add(Self[WordIndex]);
       end;
     end;
   end;
+  Result := FTokenizer.DelimitedText;
 end;
 
 function TStringListInt.IntegerArrayToString(var IntArr: TNeuralIntegerArray
@@ -2566,7 +2735,8 @@ var
   WordCount, WordMax: integer;
   WordInteger: integer;
 begin
-  Result := '';
+  FTokenizer.Clear;
+  FTokenizer.Delimiter := ' ';
   WordMax := Length(IntArr) - 1;
   if WordMax >= 0 then
   begin
@@ -2576,24 +2746,33 @@ begin
       //WriteLn(WordIndex,':',FTokenizer[WordCount]);
       if WordInteger >= 0 then
       begin
-        if WordCount = 0
-        then Result := FIntegerToStr[WordInteger]
-        else Result := Result + ' ' + FIntegerToStr[WordInteger];
+        FTokenizer.Add(FIntegerToStr[WordInteger]);
       end;
     end;
   end;
+  Result := FTokenizer.DelimitedText;
+end;
+
+function TStringListInt.IntegerListToCsv(IL: TIntegerList; pDelimiter: char = ','): string;
+var
+  WordCount, WordMax: integer;
+begin
+  FTokenizer.Clear;
+  FTokenizer.Delimiter := Delimiter;
+  WordMax := IL.Count - 1;
+  if WordMax >= 0 then
+  begin
+    for WordCount := 0 to WordMax do
+    begin
+      FTokenizer.Add(IntToStr(IL[WordCount]));
+    end;
+  end;
+  Result := FTokenizer.DelimitedText;
 end;
 
 procedure TStringListInt.SaveCurrentPositionAndSort();
-var
-  RowCnt: integer;
 begin
-  SetLength(FIntegerToStr, Self.Count);
-  for RowCnt := 0 to Self.Count - 1 do
-  begin
-    Self.Integers[RowCnt] := RowCnt;
-    FIntegerToStr[RowCnt] := Self[RowCnt];
-  end;
+  SaveCurrentPosition();
   Self.Sort();
   Self.Sorted := true;
 end;
@@ -4086,6 +4265,18 @@ begin
     vHigh := High(FData);
     for I := 0 to vHigh do
       FData[I] := Power(FData[I],Value);
+  end;
+end;
+
+procedure TVolume.PowMinus1();
+var
+  I: integer;
+  vHigh: integer;
+begin
+  vHigh := High(FData);
+  for I := 0 to vHigh do
+  begin
+    if FData[I] <> 0 then FData[I] := (1/FData[I]);
   end;
 end;
 
@@ -6311,7 +6502,31 @@ begin
   end
   else
   begin
-    WriteLn('Token length '+IntToStr(MaxToken + 1)+' is bigger than Size X '+IntToStr(SizeX)+' at OneHotEncodingReversed.');
+    WriteLn('Token length '+IntToStr(MaxToken + 1)+' is bigger than Size X '+IntToStr(SizeX)+' at OneHotEncoding.');
+  end;
+end;
+
+procedure TVolume.OneHotEncodingAtEnd(aTokens: string);
+var
+  CntToken, MaxToken, Token, Offset: integer;
+begin
+  MaxToken := Length(aTokens);
+  Offset := SizeX - MaxToken;
+  Self.Fill(0);
+  if MaxToken <= SizeX then
+  begin
+    for CntToken := 1 to MaxToken do
+    begin
+      Token := Ord(aTokens[CntToken]);
+      if Token < FDepth then
+      begin
+        Self[Offset+CntToken-1, 0, Token] := 1;
+      end
+    end;
+  end
+  else
+  begin
+    WriteLn('Token length '+IntToStr(MaxToken + 1)+' is bigger than Size X '+IntToStr(SizeX)+' at OneHotEncodingAtEnd.');
   end;
 end;
 
@@ -7058,8 +7273,25 @@ begin
     vHigh := FSize - 1;
     for I := 0 to vHigh do
     begin
-      TokenArray[I].Token:=I;
-      TokenArray[I].Score:=FData[I];
+      TokenArray[I].Token := I;
+      TokenArray[I].Score := FData[I];
+    end;
+  end;
+end;
+
+procedure TNNetVolume.GetTokenArrayOnPixel(var TokenArray: TNNetTokenArray; X,
+  Y: integer);
+var
+  I, vHigh: integer;
+begin
+  if (Length(TokenArray) <> FDepth) then SetLength(TokenArray, FDepth);
+  if FDepth > 0 then
+  begin
+    vHigh := FDepth - 1;
+    for I := 0 to vHigh do
+    begin
+      TokenArray[I].Token := I;
+      TokenArray[I].Score := Self[X, Y, I];
     end;
   end;
 end;
@@ -7721,11 +7953,11 @@ end;
 /// In this function, "As" should be weights, "VectorSize" should be the number
 // of weights from each neuron. "VBs" contains input vectors. Input vectors
 // should have VectorSize * Groups.
-procedure TNNetVolume.GroupedDotProductsTiled(Groups, NumAs, NumBs,
+procedure TNNetGroupedVolume.GroupedDotProductsTiled(Groups, NumAs, NumBs,
   VectorSize: integer; VAs, VBs: TNNetVolume; TileSizeA, TileSizeB: integer);
 var
   CntA, CntB, CntAPos, CntBPos, MaxA, MaxB: integer;
-  GroupId, GroupASize: integer;
+  GroupASize: integer;
   VectoreBSize: integer;
   DestPointer: pointer;
   CntBVectorSizePlusCntBPos: integer;
@@ -7737,6 +7969,7 @@ var
   TileACnt, TileBCnt: integer;
   StartTileA, EndTileA, StartTileB, EndTileB: integer;
   MaxTileA, MaxTileB: integer;
+  LocalGroupInfo: TNNetGroupInfo;
 begin
   MaxA := NumAs - 1;
   MaxB := NumBs - 1;
@@ -7755,6 +7988,19 @@ begin
   end;
   {$ENDIF}
 
+  // is group info not cached?
+  if Length(FGrInfoArray) <> NumAs then
+  begin
+    SetLength(FGrInfoArray, NumAs);
+    for CntA := 0 to MaxA do
+    begin
+      LocalGroupInfo.GroupId := CntA div GroupASize;
+      LocalGroupInfo.GroupIdVectorSize := LocalGroupInfo.GroupId*VectorSize;
+      LocalGroupInfo.PtrA := VAs.GetRawPtr(CntA*VectorSize);
+      FGrInfoArray[CntA] := LocalGroupInfo;
+    end;
+  end;
+
   //localNumElements := (VectorSize div 4) * 4;
   //MissedElements := VectorSize - localNumElements;
   MissedElements := VectorSize and 3;
@@ -7771,11 +8017,14 @@ begin
       EndTileA := StartTileA + TileSizeA - 1;
       for CntA := StartTileA to EndTileA do
       begin
-        GroupId := CntA div GroupASize;
-        PtrA := VAs.GetRawPtr(CntA*VectorSize);
+        //GroupId := CntA div GroupASize;
+        //GroupIdVectorSize := GroupId*VectorSize;
+        //PtrA := VAs.GetRawPtr(CntA*VectorSize);
+        LocalGroupInfo := FGrInfoArray[CntA];
+        PtrA := LocalGroupInfo.PtrA;
         for CntB := StartTileB to EndTileB do
         begin
-          PtrB := VBs.GetRawPtr(CntB*VectoreBSize + GroupId*VectorSize);
+          PtrB := VBs.GetRawPtr(CntB*VectoreBSize + LocalGroupInfo.GroupIdVectorSize);
           {$IFDEF AVXANY}
           {$IFDEF AVX32}
           if localNumElements > 0 then
@@ -11312,7 +11561,15 @@ begin
   asm_dword_copy;
 end;
 
-{$ENDIF}
+{$ENDIF} // of AVXANY
+
+{ TNNetGroupedVolume }
+
+destructor TNNetGroupedVolume.Destroy;
+begin
+  SetLength(FGrInfoArray, 0);
+  inherited Destroy;
+end;
 
 class function TVolume.DotProduct(PtrA, PtrB: TNeuralFloatArrPtr; NumElements: integer
   ): Single;

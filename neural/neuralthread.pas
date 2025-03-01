@@ -56,7 +56,7 @@ interface
 uses
   Classes, SysUtils,
   {$IFDEF FPC}
-  fgl, MTPCPU
+  fgl, UTF8Process
     {$IFDEF WINDOWS}
     ,windows
     {$ELSE}
